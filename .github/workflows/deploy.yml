@@ -55,6 +55,9 @@ jobs:
             echo "Syncing web assets to Android platform..."
             npx cap sync android
           fi
+          # Ensure custom launcher icons are present in android/app/src/main/res/
+          mkdir -p android/app/src/main/res/mipmap-mdpi android/app/src/main/res/mipmap-hdpi android/app/src/main/res/mipmap-xhdpi android/app/src/main/res/mipmap-xxhdpi android/app/src/main/res/mipmap-xxxhdpi android/app/src/main/res/mipmap-anydpi-v26
+          cp -r android/app/src/main/res/mipmap-* android/app/src/main/res/ 2>/dev/null || true
           # Ensure compileSdk is 36
           sed -i 's/compileSdkVersion = 35/compileSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true
           sed -i 's/targetSdkVersion = 35/targetSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true

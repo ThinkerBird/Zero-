@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-sans);
+    letter-spacing: -0.011em;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+}
+
+/* ==========================================================================
+   DESIGN TOKENS & REFINED THEMES (1Password / Linear / Proton inspired)
+   ========================================================================== */
+
+/* 1. Neural Mode (Sleek, refined dark theme) */
+[data-theme="neural"] {
+  --bg-app: #0e1117;
+  --bg-surface: #161a22;
+  --bg-surface-elevated: #1f242e;
+  --bg-subtle: #12151c;
+  --bg-hover: #222733;
+  --border: #282f3d;
+  --border-subtle: #1e2430;
+  --border-focus: #0ea5e9;
+  
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --accent: #0ea5e9;
+  --accent-hover: #0284c7;
+  --accent-text: #ffffff;
+  --accent-subtle: rgba(14, 165, 233, 0.12);
+  --accent-border: rgba(14, 165, 233, 0.3);
+
+  --ring-focus: rgba(14, 165, 233, 0.35);
+
+  --color-success: #10b981;
+  --color-success-bg: rgba(16, 185, 129, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-error: #ef4444;
+  --color-error-bg: rgba(239, 68, 68, 0.12);
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 4px 16px -2px rgba(0, 0, 0, 0.45);
+}
+
+/* 2. High-Contrast Mode (Pure Black OLED with Stark White & Vivid Yellow) */
+[data-theme="high-contrast"] {
+  --bg-app: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-surface-elevated: #121212;
+  --bg-subtle: #050505;
+  --bg-hover: #1f1f1f;
+  --border: #3f3f46;
+  --border-subtle: #27272a;
+  --border-focus: #facc15;
+
+  --text-primary: #ffffff;
+  --text-secondary: #e4e4e7;
+  --text-muted: #a1a1aa;
+
+  --accent: #facc15;
+  --accent-hover: #eab308;
+  --accent-text: #000000;
+  --accent-subtle: rgba(250, 204, 21, 0.15);
+  --accent-border: #facc15;
+
+  --ring-focus: rgba(250, 204, 21, 0.5);
+
+  --color-success: #4ade80;
+  --color-success-bg: rgba(74, 222, 128, 0.15);
+  --color-warning: #fde047;
+  --color-warning-bg: rgba(253, 224, 71, 0.15);
+  --color-error: #f87171;
+  --color-error-bg: rgba(248, 113, 113, 0.15);
+
+  --shadow-sm: none;
+  --shadow-card: 0 0 0 1px #3f3f46;
+}
+
+/* 3. Minimalist Mode (Pristine Light Gray, Crisp White, Slate Neutral) */
+[data-theme="minimalist"] {
+  --bg-app: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #f1f5f9;
+  --bg-subtle: #f1f5f9;
+  --bg-hover: #e2e8f0;
+  --border: #e2e8f0;
+  --border-subtle: #f1f5f9;
+  --border-focus: #2563eb;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-text: #ffffff;
+  --accent-subtle: #eff6ff;
+  --accent-border: rgba(37, 99, 235, 0.25);
+
+  --ring-focus: rgba(37, 99, 235, 0.25);
+
+  --color-success: #059669;
+  --color-success-bg: #ecfdf5;
+  --color-warning: #d97706;
+  --color-warning-bg: #fffbeb;
+  --color-error: #dc2626;
+  --color-error-bg: #fef2f2;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 2px 12px -2px rgba(15, 23, 42, 0.06);
+}
+
+/* Monospace font class */
+.font-mono-code {
+  font-family: var(--font-mono);
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Subtle focus ring styling */
+.focus-ring {
+  outline: none;
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+.focus-ring:focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--ring-focus);
+}
+
+/* Scrollbar polish */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Zero Spooky Logo Styling (Creepster font) */
+.zero-logo-spooky {
+  font-family: 'Creepster', cursive, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: #10B981;
+  text-shadow: 
+    0 0 5px rgba(16, 185, 129, 0.6),
+    0 0 10px rgba(16, 185, 129, 0.4),
+    0 0 20px rgba(13, 148, 136, 0.3);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  line-height: 1;
+  user-select: none;
+  transition: text-shadow 0.3s ease;
+}
+
+.zero-logo-spooky:hover {
+  text-shadow: 
+    0 0 8px rgba(34, 197, 94, 0.8),
+    0 0 15px rgba(34, 197, 94, 0.6),
+    0 0 25px rgba(16, 185, 129, 0.5);
+}
+

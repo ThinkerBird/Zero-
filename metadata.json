@@ -1,0 +1,6 @@
+{
+  "name": "ZeroVault — Zero-Knowledge Encryption Engine",
+  "description": "Pure client-side zero-knowledge encryption and decryption for files and text using Web Crypto AES-256-GCM, PBKDF2, and Gzip compression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

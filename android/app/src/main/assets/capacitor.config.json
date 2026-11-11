@@ -1,0 +1,8 @@
+{
+	"appId": "com.thinkerbird.zero",
+	"appName": "Zero",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}

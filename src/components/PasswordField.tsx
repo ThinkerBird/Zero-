@@ -228,7 +228,7 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
                 <button
                   type="button"
                   onClick={onGenerateKeyfile}
-                  className="px-2.5 py-1 text-xs font-medium rounded-lg border border-[var(--accent-border)] bg-[var(--accent-subtle)] text-[var(--accent)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-text)] transition-colors focus-ring"
+                  className="px-2.5 py-1 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] transition-colors focus-ring"
                   title="Generate and download a 256-bit random binary keyfile"
                 >
                   Generate .key

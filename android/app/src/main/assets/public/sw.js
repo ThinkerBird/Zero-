@@ -69,6 +69,7 @@ if (!self.define) {
 }
 define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
 
+  importScripts("sw-notifications.js");
   self.addEventListener('message', event => {
     if (event.data && event.data.type === 'SKIP_WAITING') {
       self.skipWaiting();
@@ -81,8 +82,11 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
+    "url": "sw-notifications.js",
+    "revision": "477300dad9c11b0730d5643bb802141a"
+  }, {
     "url": "index.html",
-    "revision": "c490fe3f32c59984137062fa49d11936"
+    "revision": "21e2d9fec97b8cfb7f7e751b6a11bfd9"
   }, {
     "url": "favicon.svg",
     "revision": "c04695f7f572eb9e67eb54ff523b3501"
@@ -91,16 +95,16 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
     "revision": "8af0e4d4104a7790ea58d0a8585826cb"
   }, {
     "url": "404.html",
-    "revision": "c490fe3f32c59984137062fa49d11936"
+    "revision": "21e2d9fec97b8cfb7f7e751b6a11bfd9"
   }, {
     "url": "icons/icon-maskable-512.png",
-    "revision": "f3bede31f9ae36c555f028b5b04c72af"
+    "revision": "4165a7f41b1350593e6bc25870dfda99"
   }, {
     "url": "icons/icon-512.png",
-    "revision": "f3bede31f9ae36c555f028b5b04c72af"
+    "revision": "4165a7f41b1350593e6bc25870dfda99"
   }, {
     "url": "icons/icon-192.png",
-    "revision": "627af0f313925eac1a16d8ff0cc4d0bf"
+    "revision": "2b1b6bcde85b1ef64a5c3e2330206e14"
   }, {
     "url": "icons/favicon.svg",
     "revision": "c04695f7f572eb9e67eb54ff523b3501"
@@ -112,6 +116,12 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
     "revision": "8af0e4d4104a7790ea58d0a8585826cb"
   }, {
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
+    "revision": null
+  }, {
+    "url": "assets/web-D5pBCsJR.js",
+    "revision": null
+  }, {
+    "url": "assets/web-Ci_xnX19.js",
     "revision": null
   }, {
     "url": "assets/jetbrains-mono-vietnamese-600-normal-OWROknRo.woff",
@@ -195,178 +205,40 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
     "url": "assets/jetbrains-mono-cyrillic-400-normal-BEIGL1Tu.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-700-normal-DlLaEgI2.woff2",
+    "url": "assets/index-CHhHAX9O.css",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-700-normal-BZaoP0fm.woff",
+    "url": "assets/index-B_rUJDGq.js",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-600-normal-Cc8MFFhd.woff2",
+    "url": "assets/google-sans-flex-vietnamese-full-normal-D967Jins.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-600-normal-BuLX-rYi.woff",
+    "url": "assets/google-sans-flex-tifinagh-full-normal-Pq2HyUjR.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-500-normal-mJboJaSs.woff",
+    "url": "assets/google-sans-flex-syriac-full-normal-CpRpKAhq.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-500-normal-DOriooB6.woff2",
+    "url": "assets/google-sans-flex-symbols-full-normal-Cu4Yx71x.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-400-normal-DMkecbls.woff2",
+    "url": "assets/google-sans-flex-nushu-full-normal-CfN8nJbD.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-vietnamese-400-normal-Bbgyi5SW.woff",
+    "url": "assets/google-sans-flex-math-full-normal-DBTmLsS9.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-latin-ext-700-normal-TidjK2hL.woff",
+    "url": "assets/google-sans-flex-latin-full-normal-BjtmYWLj.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-latin-ext-700-normal-Ca8adRJv.woff2",
+    "url": "assets/google-sans-flex-latin-ext-full-normal-CU3a2MK5.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-latin-ext-600-normal-D2bJ5OIk.woff2",
+    "url": "assets/google-sans-flex-cherokee-full-normal-B8tzPoP3.woff2",
     "revision": null
   }, {
-    "url": "assets/inter-latin-ext-600-normal-CIVaiw4L.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-ext-500-normal-CV4jyFjo.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-ext-500-normal-BxGbmqWO.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-ext-400-normal-C1nco2VV.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-ext-400-normal-77YHD8bZ.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-700-normal-Yt3aPRUw.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-700-normal-BLAVimhd.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-600-normal-LgqL8muc.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-600-normal-CiBQ2DWP.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-500-normal-Cerq10X2.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-500-normal-BL9OpVg8.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-400-normal-CyCys3Eg.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-latin-400-normal-C38fXH4l.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-700-normal-qfdV9bQt.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-700-normal-BoQ6DsYi.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-600-normal-DRtmH8MT.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-600-normal-B8X0CLgF.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-500-normal-C4iEst2y.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-500-normal-2j5mBUwD.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-400-normal-KugGGMne.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-ext-400-normal-DGGRlc-M.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-700-normal-C3JjAnD8.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-700-normal-BUv2fZ6O.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-600-normal-plRanbMR.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-600-normal-BZpKdvQh.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-500-normal-Xzm54t5V.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-500-normal-BIZE56-Y.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-400-normal-q2sYcFCs.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-greek-400-normal-B4URO6DV.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-700-normal-LO58E6JB.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-700-normal-BjwYoWNd.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-600-normal-Dfes3d0z.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-600-normal-Bcila6Z-.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-500-normal-BmqWE9Dz.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-500-normal-B0yAr1jD.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-400-normal-DQukG94-.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-ext-400-normal-BQZuk6qB.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-700-normal-DrXBdSj3.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-700-normal-CjBOestx.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-600-normal-CWCymEST.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-600-normal-4D_pXhcN.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-500-normal-CxZf_p3X.woff",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-500-normal-BasfLYem.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-400-normal-obahsSVq.woff2",
-    "revision": null
-  }, {
-    "url": "assets/inter-cyrillic-400-normal-HOLc17fK.woff",
-    "revision": null
-  }, {
-    "url": "assets/index-Tj-MRSIv.css",
-    "revision": null
-  }, {
-    "url": "assets/index-MzKkoAuR.js",
+    "url": "assets/google-sans-flex-canadian-aboriginal-full-normal-CmFlc3F6.woff2",
     "revision": null
   }, {
     "url": "assets/creepster-latin-400-normal-DnKpM-ys.woff2",
@@ -390,6 +262,9 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
     "url": "assets/aistudio/apple-touch-icon_6d469a77.png",
     "revision": null
   }, {
+    "url": "assets/aistudio/Screenshot_20261112-124635_1_6841d4ed.png",
+    "revision": null
+  }, {
     "url": "apple-touch-icon.png",
     "revision": "8af0e4d4104a7790ea58d0a8585826cb"
   }, {
@@ -406,13 +281,13 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
     "revision": "c04695f7f572eb9e67eb54ff523b3501"
   }, {
     "url": "icons/icon-192.png",
-    "revision": "627af0f313925eac1a16d8ff0cc4d0bf"
+    "revision": "2b1b6bcde85b1ef64a5c3e2330206e14"
   }, {
     "url": "icons/icon-512.png",
-    "revision": "f3bede31f9ae36c555f028b5b04c72af"
+    "revision": "4165a7f41b1350593e6bc25870dfda99"
   }, {
     "url": "icons/icon-maskable-512.png",
-    "revision": "f3bede31f9ae36c555f028b5b04c72af"
+    "revision": "4165a7f41b1350593e6bc25870dfda99"
   }, {
     "url": "manifest.webmanifest",
     "revision": "4db37ef4776783a609cfd95c5df9c44a"

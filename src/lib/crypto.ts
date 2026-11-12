@@ -3,6 +3,9 @@
  * 100% Client-side Web Crypto API (crypto.subtle)
  */
 
+import { saveFile } from './fileSave';
+export { saveFile } from './fileSave';
+
 export interface FileMetadata {
   name: string;
   type: string;
@@ -693,18 +696,12 @@ export async function decryptFile(
 }
 
 /**
- * Automatic browser download trigger
+ * Automatic safe download trigger across Web and Native Capacitor
  */
 export function downloadBlob(blob: Blob | File, filename: string): void {
-  const safeName = sanitizeFilename(filename);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = safeName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  saveFile(blob, filename).catch((err) => {
+    console.error('downloadBlob failed:', err);
+  });
 }
 
 /**

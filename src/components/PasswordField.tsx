@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Eye, EyeOff, Copy, Dices, Check, KeyRound, FileKey, X, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, Copy, Dices, Check, KeyRound, FileKey, X, Sparkles, Clipboard as ClipboardIcon } from 'lucide-react';
 import { PasswordStrength } from '../lib/crypto';
 import { StrengthMeter } from './StrengthMeter';
 
@@ -7,6 +7,7 @@ interface PasswordFieldProps {
   password: string;
   onPasswordChange: (value: string) => void;
   onGeneratePassword: () => void;
+  onPastePassword?: () => void;
   strength: PasswordStrength;
   isEncryptMode: boolean;
   keyfile: File | null;
@@ -14,12 +15,14 @@ interface PasswordFieldProps {
   onAttachKeyfile: (file: File) => void;
   onRemoveKeyfile: () => void;
   onGenerateKeyfile: () => void;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 export const PasswordField: React.FC<PasswordFieldProps> = ({
   password,
   onPasswordChange,
   onGeneratePassword,
+  onPastePassword,
   strength,
   isEncryptMode,
   keyfile,
@@ -27,10 +30,13 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
   onAttachKeyfile,
   onRemoveKeyfile,
   onGenerateKeyfile,
+  inputRef,
 }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const localInputRef = useRef<HTMLInputElement>(null);
+  const activeInputRef = inputRef || localInputRef;
 
   const handleCopy = async () => {
     if (!password) return;
@@ -75,6 +81,7 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
       {/* Input Field with integrated inline actions */}
       <div className="relative flex items-center">
         <input
+          ref={activeInputRef}
           type={showPassword ? 'text' : 'password'}
           value={password}
           onChange={(e) => onPasswordChange(e.target.value)}
@@ -87,7 +94,7 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
               ? 'Enter passphrase (if one was used with keyfile)...'
               : 'Enter the passphrase used during encryption...'
           }
-          className="w-full pl-3.5 pr-28 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] text-sm font-mono-code focus-ring transition-colors"
+          className="w-full pl-3.5 pr-32 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] text-sm font-mono-code focus-ring transition-colors"
           autoComplete="off"
           spellCheck={false}
           aria-label="Secret Passphrase"
@@ -105,6 +112,19 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
               aria-label="Generate random secure password"
             >
               <Dices className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Paste Password */}
+          {onPastePassword && (
+            <button
+              type="button"
+              onClick={onPastePassword}
+              className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
+              title="Paste password from clipboard"
+              aria-label="Paste password from clipboard"
+            >
+              <ClipboardIcon className="w-4 h-4" />
             </button>
           )}
 

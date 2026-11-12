@@ -7,6 +7,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(NativeFileManagerPlugin.class);
         super.onCreate(savedInstanceState);
         // Prevent screenshots, screen recording, and task switcher recents caching of sensitive data
         getWindow().setFlags(

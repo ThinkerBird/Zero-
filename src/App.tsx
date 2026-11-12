@@ -18,6 +18,13 @@ import {
   computeKeyfileFingerprint,
   generateKeyfile,
 } from './lib/crypto';
+import { saveFile } from './lib/fileSave';
+import { handleSafePaste } from './lib/clipboard';
+import {
+  initNotifications,
+  requestNotificationPermissionOnUserAction,
+  notifyOperationComplete,
+} from './lib/notifications';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { ModeTabs } from './components/ModeTabs';
@@ -104,6 +111,31 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // DOM element references for clipboard paste focus fallback
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize notification listener (tap opens Downloads / Documents on Android, toasts on PWA)
+  useEffect(() => {
+    initNotifications(() => {
+      addToast(
+        'Saved to your Downloads folder',
+        'Encrypted or decrypted files are saved in your device Downloads / Documents folder.',
+        'info'
+      );
+    });
+
+    // Handle initial launch if opened via notification click
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('from_notification')) {
+      addToast(
+        'Saved to your Downloads folder',
+        'Your processed files are stored in your device Downloads / Documents folder.',
+        'info'
+      );
+    }
+  }, [addToast]);
+
   // Emergency Wipe Function
   const handleEmergencyWipe = useCallback(() => {
     setInputText('');
@@ -151,14 +183,14 @@ export default function App() {
   const handleGenerateKeyfile = async () => {
     try {
       const { blob, fileName } = generateKeyfile();
-      downloadBlob(blob, fileName);
+      await saveFile(blob, fileName);
       const buffer = await blob.arrayBuffer();
       const file = new File([blob], fileName, { type: 'application/octet-stream' });
       const fingerprint = await computeKeyfileFingerprint(buffer);
       setKeyfile(file);
       setKeyfileBuffer(buffer);
       setKeyfileFingerprint(fingerprint);
-      addToast('Keyfile Generated', `${fileName} created, downloaded, and attached.`, 'success');
+      addToast('Keyfile Generated', `${fileName} created, saved, and attached.`, 'success');
     } catch {
       addToast('Generation Failed', 'Could not generate random keyfile.', 'error');
     }
@@ -219,15 +251,29 @@ export default function App() {
   };
 
   const handlePasteText = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
+    await handleSafePaste({
+      targetElement: textInputRef.current,
+      onPasted: (text) => {
         setInputText(text);
         addToast('Pasted from Clipboard', `${text.length} characters inserted.`, 'info');
-      }
-    } catch {
-      addToast('Paste Access Denied', 'Please grant clipboard permissions to paste directly.', 'error');
-    }
+      },
+      onHintNeeded: (hint) => {
+        addToast('Clipboard Notice', hint, 'warning');
+      },
+    });
+  };
+
+  const handlePastePassword = async () => {
+    await handleSafePaste({
+      targetElement: passwordInputRef.current,
+      onPasted: (text) => {
+        setPassword(text);
+        addToast('Password Pasted', `${text.length} characters inserted into passphrase.`, 'info');
+      },
+      onHintNeeded: (hint) => {
+        addToast('Clipboard Notice', hint, 'warning');
+      },
+    });
   };
 
   const handleAddFiles = (newFiles: File[]) => {
@@ -255,6 +301,9 @@ export default function App() {
       addToast('Credentials Required', 'Please enter a passphrase or attach a keyfile.', 'warning');
       return;
     }
+
+    // Request notification permission once upon user action (never on initial page load)
+    await requestNotificationPermissionOnUserAction();
 
     setIsProcessing(true);
 
@@ -330,8 +379,26 @@ export default function App() {
               );
 
               if (autoDownload) {
-                downloadBlob(blob, fileName);
+                const saveRes = await saveFile(blob, fileName);
+                if (saveRes.success) {
+                  addToast(
+                    'File Saved',
+                    saveRes.method === 'native'
+                      ? `${fileName} saved to Documents directory.`
+                      : `${fileName} downloaded.`,
+                    'success'
+                  );
+                } else {
+                  addToast('Save Notice', saveRes.error || 'Could not auto-download file.', 'warning');
+                }
               }
+
+              // Send completion notification (safe, never includes keys or passwords)
+              await notifyOperationComplete({
+                type: 'encrypt',
+                filename: fileName,
+                success: true,
+              });
             } else {
               const restoredFile = await decryptFile(
                 item.file,
@@ -361,8 +428,26 @@ export default function App() {
               );
 
               if (autoDownload) {
-                downloadBlob(restoredFile, restoredFile.name);
+                const saveRes = await saveFile(restoredFile, restoredFile.name);
+                if (saveRes.success) {
+                  addToast(
+                    'File Restored & Saved',
+                    saveRes.method === 'native'
+                      ? `${restoredFile.name} saved to Documents directory.`
+                      : `${restoredFile.name} downloaded.`,
+                    'success'
+                  );
+                } else {
+                  addToast('Save Notice', saveRes.error || 'Could not auto-download file.', 'warning');
+                }
               }
+
+              // Send completion notification (safe, never includes keys or passwords)
+              await notifyOperationComplete({
+                type: 'decrypt',
+                filename: restoredFile.name,
+                success: true,
+              });
             }
           } catch (fileErr: unknown) {
             const errMessage = fileErr instanceof Error ? fileErr.message : 'Processing failed';
@@ -372,12 +457,19 @@ export default function App() {
               )
             );
             addToast(`Failed: ${item.file.name}`, errMessage, 'error');
+
+            // Send failure notification (generic message only)
+            await notifyOperationComplete({
+              type: mode,
+              filename: item.file.name,
+              success: false,
+            });
           }
         }
 
         addToast(
           mode === 'encrypt' ? 'Batch Encryption Finished' : 'Batch Decryption Finished',
-          autoDownload ? 'Processed files downloaded automatically.' : 'Files ready for download.',
+          autoDownload ? 'Processed files saved or downloaded.' : 'Files ready for download.',
           'success'
         );
       }
@@ -468,6 +560,7 @@ export default function App() {
             onTextChange={setInputText}
             onPaste={handlePasteText}
             onClear={() => setInputText('')}
+            textareaRef={textInputRef}
           />
         ) : (
           <FilePanel
@@ -486,6 +579,7 @@ export default function App() {
           password={password}
           onPasswordChange={setPassword}
           onGeneratePassword={handleGeneratePassword}
+          onPastePassword={handlePastePassword}
           strength={passwordStrength}
           isEncryptMode={mode === 'encrypt'}
           keyfile={keyfile}
@@ -493,6 +587,7 @@ export default function App() {
           onAttachKeyfile={handleAttachKeyfile}
           onRemoveKeyfile={handleRemoveKeyfile}
           onGenerateKeyfile={handleGenerateKeyfile}
+          inputRef={passwordInputRef}
         />
 
         {/* Primary Action Button */}

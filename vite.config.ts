@@ -88,6 +88,7 @@ export default defineConfig(() => {
           globPatterns: ['**/*.{js,css,html,woff,woff2,svg,png}'],
           navigateFallback: base === '/' ? 'index.html' : `${base}index.html`,
           cleanupOutdatedCaches: true,
+          importScripts: ['sw-notifications.js'],
         },
         devOptions: {
           enabled: false,

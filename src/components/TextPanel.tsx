@@ -8,6 +8,7 @@ interface TextPanelProps {
   onTextChange: (text: string) => void;
   onPaste: () => void;
   onClear: () => void;
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 export const TextPanel: React.FC<TextPanelProps> = ({
@@ -16,6 +17,7 @@ export const TextPanel: React.FC<TextPanelProps> = ({
   onTextChange,
   onPaste,
   onClear,
+  textareaRef,
 }) => {
   const isEncrypt = mode === 'encrypt';
 
@@ -66,6 +68,7 @@ export const TextPanel: React.FC<TextPanelProps> = ({
       {/* Textarea */}
       <div className="relative">
         <textarea
+          ref={textareaRef}
           rows={6}
           value={text}
           onChange={(e) => onTextChange(e.target.value)}

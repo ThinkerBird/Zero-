@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Routes, Route, Navigate, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Lock, Unlock, Loader2, AlertTriangle, X } from 'lucide-react';
 import { AppMode, AppTheme, PayloadType, ToastMessage, FileItem } from './types';
 import {
@@ -38,32 +38,34 @@ import { FaqPage } from './pages/FaqPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 export default function App() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
 
   // 1. Theme State with localStorage Persistence
   const [theme, setTheme] = useState<AppTheme>(() => {
-    const stored = localStorage.getItem('zero-theme') as AppTheme;
-    if (stored === 'high-contrast' || stored === 'minimalist' || stored === 'neural') {
-      return stored;
-    }
     const themeParam = new URLSearchParams(window.location.search).get('theme');
-    return themeParam === 'high-contrast' || themeParam === 'minimalist' ? themeParam : 'neural';
+    if (themeParam === 'high-contrast' || themeParam === 'minimalist' || themeParam === 'neural') {
+      return themeParam;
+    }
+    try {
+      const stored = localStorage.getItem('zero-theme') as AppTheme;
+      if (stored === 'high-contrast' || stored === 'minimalist' || stored === 'neural') {
+        return stored;
+      }
+    } catch {
+      // Storage access may be restricted
+    }
+    return 'neural';
   });
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('zero-theme', theme);
-    
-    // Sync with URL if needed
-    const currentParam = searchParams.get('theme');
-    if (currentParam !== theme) {
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('theme', theme);
-      setSearchParams(nextParams, { replace: true });
+    try {
+      localStorage.setItem('zero-theme', theme);
+    } catch {
+      // Storage access may be restricted
     }
-  }, [theme, searchParams, setSearchParams]);
+  }, [theme]);
 
   const updateTheme = useCallback((newTheme: AppTheme) => {
     setTheme(newTheme);
@@ -580,8 +582,9 @@ export default function App() {
 
         {/* Route Definitions */}
         <Routes>
-          <Route path="/" element={<Navigate to="/encrypt" replace />} />
+          <Route path="/" element={renderVaultPanel('encrypt')} />
           <Route path="/encrypt" element={renderVaultPanel('encrypt')} />
+          <Route path="/index.html" element={renderVaultPanel('encrypt')} />
           <Route path="/decrypt" element={renderVaultPanel('decrypt')} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/security" element={<SecurityPage />} />

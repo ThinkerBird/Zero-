@@ -57,6 +57,9 @@ jobs:
           fi
           # Generate native Android icons and splash assets from /assets
           npx @capacitor/assets generate --android || true
+          # Sync version name from package.json
+          APP_VERSION=$(node -p "require('./package.json').version")
+          sed -i "s/versionName \".*\"/versionName \"$APP_VERSION\"/g" android/app/build.gradle 2>/dev/null || true
           # Ensure compileSdk is 36
           sed -i 's/compileSdkVersion = 35/compileSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true
           sed -i 's/targetSdkVersion = 35/targetSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true

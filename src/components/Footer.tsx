@@ -1,7 +1,13 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 
 export const Footer: React.FC = () => {
+  const location = useLocation();
+  const isHomeActive =
+    location.pathname === '/' ||
+    location.pathname === '/encrypt' ||
+    location.pathname === '/index.html';
+
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `transition-colors hover:text-[var(--text-primary)] ${
       isActive ? 'text-[var(--accent)] font-semibold' : 'text-[var(--text-muted)]'
@@ -12,7 +18,14 @@ export const Footer: React.FC = () => {
       <div className="max-w-3xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
         {/* Navigation Slugs */}
         <nav className="flex items-center gap-4 text-[11px]">
-          <NavLink to="/encrypt" className={linkClass}>
+          <NavLink
+            to="/encrypt"
+            className={() =>
+              `transition-colors hover:text-[var(--text-primary)] ${
+                isHomeActive ? 'text-[var(--accent)] font-semibold' : 'text-[var(--text-muted)]'
+              }`
+            }
+          >
             Home
           </NavLink>
           <NavLink to="/how-it-works" className={linkClass}>

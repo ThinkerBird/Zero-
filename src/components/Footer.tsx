@@ -12,6 +12,9 @@ export const Footer: React.FC = () => {
       <div className="max-w-3xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
         {/* Navigation Slugs */}
         <nav className="flex items-center gap-4 text-[11px]">
+          <NavLink to="/encrypt" className={linkClass}>
+            Home
+          </NavLink>
           <NavLink to="/how-it-works" className={linkClass}>
             How It Works
           </NavLink>

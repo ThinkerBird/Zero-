@@ -42,25 +42,32 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // 1. URL Theme State
-  const themeParam = searchParams.get('theme');
-  const theme: AppTheme =
-    themeParam === 'high-contrast' || themeParam === 'minimalist'
-      ? themeParam
-      : 'neural';
+  // 1. Theme State with localStorage Persistence
+  const [theme, setTheme] = useState<AppTheme>(() => {
+    const stored = localStorage.getItem('zero-theme') as AppTheme;
+    if (stored === 'high-contrast' || stored === 'minimalist' || stored === 'neural') {
+      return stored;
+    }
+    const themeParam = new URLSearchParams(window.location.search).get('theme');
+    return themeParam === 'high-contrast' || themeParam === 'minimalist' ? themeParam : 'neural';
+  });
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  const updateTheme = useCallback(
-    (newTheme: AppTheme) => {
+    localStorage.setItem('zero-theme', theme);
+    
+    // Sync with URL if needed
+    const currentParam = searchParams.get('theme');
+    if (currentParam !== theme) {
       const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('theme', newTheme);
+      nextParams.set('theme', theme);
       setSearchParams(nextParams, { replace: true });
-    },
-    [searchParams, setSearchParams]
-  );
+    }
+  }, [theme, searchParams, setSearchParams]);
+
+  const updateTheme = useCallback((newTheme: AppTheme) => {
+    setTheme(newTheme);
+  }, []);
 
   // 2. Cryptographic Local State
   const [password, setPassword] = useState('');

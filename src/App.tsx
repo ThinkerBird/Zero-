@@ -571,6 +571,9 @@ export default function App() {
             onClearFiles={handleClearFiles}
             autoDownload={autoDownload}
             onToggleAutoDownload={() => setAutoDownload(!autoDownload)}
+            onNotifyDownload={(filename) =>
+              addToast('File Downloaded', `${filename} saved or downloaded to your device.`, 'success')
+            }
           />
         )}
 

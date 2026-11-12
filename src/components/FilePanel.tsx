@@ -11,6 +11,7 @@ interface FilePanelProps {
   onClearFiles: () => void;
   autoDownload: boolean;
   onToggleAutoDownload: () => void;
+  onNotifyDownload?: (filename: string) => void;
 }
 
 export const FilePanel: React.FC<FilePanelProps> = ({
@@ -21,6 +22,7 @@ export const FilePanel: React.FC<FilePanelProps> = ({
   onClearFiles,
   autoDownload,
   onToggleAutoDownload,
+  onNotifyDownload,
 }) => {
   const isEncrypt = mode === 'encrypt';
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -190,8 +192,9 @@ export const FilePanel: React.FC<FilePanelProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           downloadBlob(item.file, item.file.name);
+                          onNotifyDownload?.(item.file.name);
                         }}
-                        className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--accent)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
+                        className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
                         title={`Download attached file (${item.file.name})`}
                         aria-label={`Download attached file (${item.file.name})`}
                       >
@@ -220,8 +223,9 @@ export const FilePanel: React.FC<FilePanelProps> = ({
                           const targetBlob = item.resultBlob || item.file;
                           const targetName = item.resultFileName || item.file.name;
                           downloadBlob(targetBlob, targetName);
+                          onNotifyDownload?.(targetName);
                         }}
-                        className="p-1.5 rounded-md bg-[var(--accent-subtle)] text-[var(--accent)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-text)] border border-[var(--accent-border)] transition-colors focus-ring"
+                        className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
                         title={`Download ${item.resultFileName || item.file.name}`}
                         aria-label={`Download ${item.resultFileName || item.file.name}`}
                       >
@@ -241,8 +245,9 @@ export const FilePanel: React.FC<FilePanelProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           downloadBlob(item.file, item.file.name);
+                          onNotifyDownload?.(item.file.name);
                         }}
-                        className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--accent)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
+                        className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
                         title={`Download original file (${item.file.name})`}
                         aria-label={`Download original file (${item.file.name})`}
                       >

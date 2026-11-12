@@ -158,10 +158,10 @@ export async function notifyOperationComplete({
   if (success) {
     if (type === 'encrypt') {
       title = `Encryption complete: ${filename}`;
-      body = 'Ciphertext created and saved to your device. Tap to open Downloads.';
+      body = 'Ciphertext created and saved to your device.';
     } else {
       title = `Decryption complete: ${filename}`;
-      body = 'Original file restored and saved to your device. Tap to open Downloads.';
+      body = 'Original file restored and saved to your device.';
     }
   } else {
     // Generic message only for failures to protect zero-knowledge integrity

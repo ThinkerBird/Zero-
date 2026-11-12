@@ -115,12 +115,12 @@ export default function App() {
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize notification listener (tap opens Downloads / Documents on Android, toasts on PWA)
+  // Initialize notification listener
   useEffect(() => {
     initNotifications(() => {
       addToast(
-        'Saved to your Downloads folder',
-        'Encrypted or decrypted files are saved in your device Downloads / Documents folder.',
+        'File Operation Complete',
+        'Your processed file has been saved to your device.',
         'info'
       );
     });
@@ -129,8 +129,8 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('from_notification')) {
       addToast(
-        'Saved to your Downloads folder',
-        'Your processed files are stored in your device Downloads / Documents folder.',
+        'File Operation Complete',
+        'Your processed file has been saved to your device.',
         'info'
       );
     }

@@ -3,7 +3,8 @@
  * 100% Client-side Web Crypto API (crypto.subtle)
  */
 
-import { saveFile } from './fileSave';
+import { saveFile, triggerBrowserDownload } from './fileSave';
+import { Capacitor } from '@capacitor/core';
 export { saveFile } from './fileSave';
 
 export interface FileMetadata {
@@ -696,12 +697,17 @@ export async function decryptFile(
 }
 
 /**
- * Automatic safe download trigger across Web and Native Capacitor
+ * Automatic safe download trigger across Web and Native Capacitor.
+ * On Web, triggers download synchronously inside user gesture.
  */
 export function downloadBlob(blob: Blob | File, filename: string): void {
-  saveFile(blob, filename).catch((err) => {
-    console.error('downloadBlob failed:', err);
-  });
+  if (Capacitor.isNativePlatform()) {
+    saveFile(blob, filename).catch((err) => {
+      console.error('Native saveFile failed:', err);
+    });
+  } else {
+    triggerBrowserDownload(blob, filename);
+  }
 }
 
 /**

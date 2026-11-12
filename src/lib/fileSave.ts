@@ -55,11 +55,54 @@ function blobToBase64(blob: Blob): Promise<string> {
 const activeObjectUrls = new Set<string>();
 
 /**
+ * Direct synchronous browser download trigger.
+ * Executed synchronously inside user click gesture for maximum browser compatibility.
+ */
+export function triggerBrowserDownload(blob: Blob | File, rawFilename: string): boolean {
+  try {
+    const filename = sanitizeFilename(rawFilename);
+    const safeBlob = blob;
+    const url = URL.createObjectURL(safeBlob);
+    activeObjectUrls.add(url);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+
+    document.body.appendChild(link);
+    if (typeof link.click === 'function') {
+      link.click();
+    } else {
+      const evt = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
+      link.dispatchEvent(evt);
+    }
+    document.body.removeChild(link);
+
+    // Retain object URL for 60 seconds so browser download manager finishes streaming
+    setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url);
+        activeObjectUrls.delete(url);
+      } catch {
+        // Ignore revocation errors
+      }
+    }, 60000);
+
+    return true;
+  } catch (err) {
+    console.error('triggerBrowserDownload error:', err);
+    return false;
+  }
+}
+
+/**
  * Single shared file saving utility for both encryption output and decrypted restored files.
  * Works uniformly across:
  * - Native Android/Capacitor: Saves via @capacitor/filesystem to Public Documents directory.
  * - Desktop Chrome/Firefox/Safari: Triggers download via <a download> without early URL revocation.
- * - Mobile Android Chrome / iOS Safari: Delayed revocation + Web Share API fallback.
+ * - Mobile Android Chrome / iOS Safari: Synchronous download + Web Share API fallback.
  */
 export async function saveFile(blob: Blob | File, rawFilename: string): Promise<FileSaveResult> {
   const filename = sanitizeFilename(rawFilename);
@@ -72,7 +115,6 @@ export async function saveFile(blob: Blob | File, rawFilename: string): Promise<
       if (permStatus.publicStorage !== 'granted') {
         const reqResult = await Filesystem.requestPermissions();
         if (reqResult.publicStorage !== 'granted') {
-          // If public storage is denied, fallback to app Data directory
           console.warn('Public storage permission denied, writing to app Data directory.');
         }
       }
@@ -103,79 +145,51 @@ export async function saveFile(blob: Blob | File, rawFilename: string): Promise<
 
   // 2. Web / PWA Environment
   try {
-    const safeBlob = blob;
-
-    const objectUrl = URL.createObjectURL(safeBlob);
-    activeObjectUrls.add(objectUrl);
-
-    // Create anchor tag
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = filename;
-    link.rel = 'noopener';
-    link.style.display = 'none';
-    document.body.appendChild(link);
-
-    // Dispatch click event
-    link.click();
-
-    // Clean up DOM node
-    document.body.removeChild(link);
-
-    // CRITICAL FIX: Do NOT revoke the object URL after 1 second!
-    // Mobile browsers and WebView download managers need time to stream the data to disk.
-    // Retain object URL for 60 seconds before revoking.
-    setTimeout(() => {
-      try {
-        URL.revokeObjectURL(objectUrl);
-        activeObjectUrls.delete(objectUrl);
-      } catch {
-        // Ignore revocation errors
-      }
-    }, 60000);
-
-    return {
-      success: true,
-      method: 'download',
-      filename,
-      pathOrUri: objectUrl,
-    };
+    const webSuccess = triggerBrowserDownload(blob, filename);
+    if (webSuccess) {
+      return {
+        success: true,
+        method: 'download',
+        filename,
+      };
+    }
   } catch (webErr: unknown) {
-    // 3. Fallback to Web Share API if download attribute is unsupported or throws
-    if (typeof navigator !== 'undefined' && 'canShare' in navigator) {
-      try {
-        const shareFile = new File([blob], filename, {
-          type: blob.type || 'application/octet-stream',
+    // Fall through to share API
+  }
+
+  // 3. Fallback to Web Share API if download attribute is unsupported or throws
+  if (typeof navigator !== 'undefined' && 'canShare' in navigator) {
+    try {
+      const shareFile = new File([blob], filename, {
+        type: blob.type || 'application/octet-stream',
+      });
+      if (navigator.canShare({ files: [shareFile] })) {
+        await navigator.share({
+          files: [shareFile],
+          title: filename,
         });
-        if (navigator.canShare({ files: [shareFile] })) {
-          await navigator.share({
-            files: [shareFile],
-            title: filename,
-          });
-          return {
-            success: true,
-            method: 'share',
-            filename,
-          };
-        }
-      } catch (shareErr) {
-        // If user cancelled share sheet, don't treat as fatal if they aborted
-        if ((shareErr as Error)?.name === 'AbortError') {
-          return {
-            success: true,
-            method: 'share',
-            filename,
-          };
-        }
+        return {
+          success: true,
+          method: 'share',
+          filename,
+        };
+      }
+    } catch (shareErr) {
+      // If user cancelled share sheet, don't treat as fatal if they aborted
+      if ((shareErr as Error)?.name === 'AbortError') {
+        return {
+          success: true,
+          method: 'share',
+          filename,
+        };
       }
     }
-
-    const errMessage = webErr instanceof Error ? webErr.message : 'Download failed';
-    return {
-      success: false,
-      method: 'download',
-      filename,
-      error: errMessage,
-    };
   }
+
+  return {
+    success: false,
+    method: 'download',
+    filename,
+    error: 'Download failed',
+  };
 }

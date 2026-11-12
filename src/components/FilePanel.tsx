@@ -182,9 +182,22 @@ export const FilePanel: React.FC<FilePanelProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {/* Status indicator */}
                   {item.status === 'pending' && (
-                    <span className="text-[10px] text-[var(--text-muted)]">Queued</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-[var(--text-muted)]">Queued</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadBlob(item.file, item.file.name);
+                        }}
+                        className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--accent)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
+                        title={`Download attached file (${item.file.name})`}
+                        aria-label={`Download attached file (${item.file.name})`}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
 
                   {item.status === 'processing' && (
@@ -200,30 +213,52 @@ export const FilePanel: React.FC<FilePanelProps> = ({
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Done
                       </span>
-                      {item.resultBlob && (
-                        <button
-                          onClick={() => downloadBlob(item.resultBlob!, item.resultFileName || item.file.name)}
-                          className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--accent)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
-                          title="Download processed file"
-                          aria-label="Download processed file"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const targetBlob = item.resultBlob || item.file;
+                          const targetName = item.resultFileName || item.file.name;
+                          downloadBlob(targetBlob, targetName);
+                        }}
+                        className="p-1.5 rounded-md bg-[var(--accent-subtle)] text-[var(--accent)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-text)] border border-[var(--accent-border)] transition-colors focus-ring"
+                        title={`Download ${item.resultFileName || item.file.name}`}
+                        aria-label={`Download ${item.resultFileName || item.file.name}`}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   )}
 
                   {item.status === 'error' && (
-                    <span className="text-[10px] text-[var(--color-error)] flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      Failed
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-[var(--color-error)] flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        Failed
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadBlob(item.file, item.file.name);
+                        }}
+                        className="p-1 rounded text-[var(--text-secondary)] hover:text-[var(--accent)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
+                        title={`Download original file (${item.file.name})`}
+                        aria-label={`Download original file (${item.file.name})`}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
 
                   {/* Remove file button */}
                   {item.status !== 'processing' && (
                     <button
-                      onClick={() => onRemoveFile(item.id)}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveFile(item.id);
+                      }}
                       className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--color-error)] hover:bg-[var(--bg-hover)] transition-colors focus-ring"
                       title="Remove file"
                       aria-label="Remove file from list"

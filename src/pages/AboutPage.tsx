@@ -56,7 +56,7 @@ export const AboutPage: React.FC = () => {
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-text)] transition-all shadow-sm focus-ring"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Download Android APK (v1.36.1)</span>
+              <span>Download Android APK (v2.0.0)</span>
               <ExternalLink className="w-3 h-3 opacity-80" />
             </a>
 

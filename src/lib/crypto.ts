@@ -12,7 +12,6 @@ export interface FileMetadata {
   type: string;
   compressed: boolean;
   size?: number;
-  encryptedAt?: number;
   version?: number;
   chunked?: boolean;
   chunkSize?: number;
@@ -23,12 +22,20 @@ export interface EncryptionProgress {
   stage: 'compressing' | 'encrypting' | 'decrypting' | 'decompressing' | 'finalizing' | 'idle';
 }
 
-// Magic bytes for Version 2 & Version 3 (Chunked Streaming) Headers
+// Magic bytes for Version 2, 3, & 4 (Chunked Streaming) Headers
 const MAGIC_V2 = new Uint8Array([0x5A, 0x45, 0x52, 0x4F, 0x02, 0x00]); // "ZERO\x02\x00"
 const MAGIC_V3 = new Uint8Array([0x5A, 0x45, 0x52, 0x4F, 0x03, 0x00]); // "ZERO\x03\x00"
+const MAGIC_V4 = new Uint8Array([0x5A, 0x45, 0x52, 0x4F, 0x04, 0x00]); // "ZERO\x04\x00"
+const V4_HEADER_SIZE = 6 + 4 + 4 + 16 + 12; // 42 bytes fixed plaintext header
+const KEYFILE_NAME_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const DECRYPTION_FAILED_ERROR = 'Decryption failed';
 export const DEFAULT_PBKDF2_ITERATIONS = 600000;
 export const LEGACY_PBKDF2_ITERATIONS = 100000;
+export const MIN_V4_PBKDF2_ITERATIONS = 600000;
+export const MAX_PBKDF2_ITERATIONS = 10000000;
 export const STREAM_CHUNK_SIZE = 2 * 1024 * 1024; // 2MB Chunk size for memory-safe streaming
+export const MIN_STREAM_CHUNK_SIZE = 64 * 1024; // 64KB
+export const MAX_STREAM_CHUNK_SIZE = 16 * 1024 * 1024; // 16MB
 
 /**
  * Robust base64 encoding that avoids call stack overflow on large buffers
@@ -70,12 +77,33 @@ export async function computeKeyfileFingerprint(buffer: ArrayBuffer): Promise<st
 }
 
 /**
+ * Generates an unbiased random 8-character lowercase alphanumeric string using CSPRNG
+ */
+function generateRandomFilenameStem(length = 8): string {
+  const alphabetLen = KEYFILE_NAME_ALPHABET.length; // 36
+  const maxUnbiasedByte = 256 - (256 % alphabetLen); // 252
+  let result = '';
+  const buf = new Uint8Array(16);
+
+  while (result.length < length) {
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < buf.length && result.length < length; i++) {
+      if (buf[i] < maxUnbiasedByte) {
+        result += KEYFILE_NAME_ALPHABET[buf[i] % alphabetLen];
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
  * Generates a 32-byte (256-bit) cryptographically secure random keyfile
  */
 export function generateKeyfile(): { blob: Blob; fileName: string } {
   const randomBytes = crypto.getRandomValues(new Uint8Array(32));
   const blob = new Blob([randomBytes], { type: 'application/octet-stream' });
-  const fileName = `vault-${Date.now().toString(36)}.key`;
+  const fileName = `${generateRandomFilenameStem(8)}.key`;
   return { blob, fileName };
 }
 
@@ -199,52 +227,46 @@ export async function decryptText(
   password: string,
   keyfileBuffer?: ArrayBuffer | null
 ): Promise<string> {
-  if (!password && !keyfileBuffer) {
-    throw new Error('Password or keyfile is required for decryption');
-  }
-
-  let base64Payload = rawInput.trim();
-  let iterations = DEFAULT_PBKDF2_ITERATIONS;
-
-  if (base64Payload.startsWith('ZERO:v2:')) {
-    base64Payload = base64Payload.replace('ZERO:v2:', '');
-    iterations = DEFAULT_PBKDF2_ITERATIONS;
-  } else {
-    iterations = LEGACY_PBKDF2_ITERATIONS;
-  }
-
-  const combined = base64ToBuffer(base64Payload);
-  if (combined.length < 28) {
-    throw new Error('Invalid payload: buffer too short to contain cryptographic salt and IV header');
-  }
-
-  const salt = combined.slice(0, 16);
-  const iv = combined.slice(16, 28);
-  const ciphertext = combined.slice(28);
-
-  let key: CryptoKey;
   try {
-    key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Key derivation failed';
-    throw new Error(msg);
-  }
+    if (!password && !keyfileBuffer) {
+      throw new Error(DECRYPTION_FAILED_ERROR);
+    }
 
-  try {
-    const decryptedBuffer = await crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: iv as unknown as BufferSource,
-      },
-      key,
-      ciphertext as unknown as BufferSource
-    );
+    let base64Payload = rawInput.trim();
+    let iterations = DEFAULT_PBKDF2_ITERATIONS;
 
-    const textDecoder = new TextDecoder('utf-8', { fatal: true });
-    return textDecoder.decode(decryptedBuffer);
-  } catch {
-    if (iterations === DEFAULT_PBKDF2_ITERATIONS) {
-      try {
+    if (base64Payload.startsWith('ZERO:v2:')) {
+      base64Payload = base64Payload.replace('ZERO:v2:', '');
+      iterations = DEFAULT_PBKDF2_ITERATIONS;
+    } else {
+      iterations = LEGACY_PBKDF2_ITERATIONS;
+    }
+
+    const combined = base64ToBuffer(base64Payload);
+    if (combined.length < 28) {
+      throw new Error(DECRYPTION_FAILED_ERROR);
+    }
+
+    const salt = combined.slice(0, 16);
+    const iv = combined.slice(16, 28);
+    const ciphertext = combined.slice(28);
+
+    const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
+
+    try {
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: iv as unknown as BufferSource,
+        },
+        key,
+        ciphertext as unknown as BufferSource
+      );
+
+      const textDecoder = new TextDecoder('utf-8', { fatal: true });
+      return textDecoder.decode(decryptedBuffer);
+    } catch {
+      if (iterations === DEFAULT_PBKDF2_ITERATIONS) {
         const legacyKey = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, LEGACY_PBKDF2_ITERATIONS);
         const legacyDecryptedBuffer = await crypto.subtle.decrypt(
           {
@@ -256,11 +278,11 @@ export async function decryptText(
         );
         const textDecoder = new TextDecoder('utf-8', { fatal: true });
         return textDecoder.decode(legacyDecryptedBuffer);
-      } catch {
-        // Fall through
       }
+      throw new Error(DECRYPTION_FAILED_ERROR);
     }
-    throw new Error('Decryption failed: Incorrect password/keyfile or corrupted payload.');
+  } catch {
+    throw new Error(DECRYPTION_FAILED_ERROR);
   }
 }
 
@@ -333,8 +355,21 @@ function deriveChunkIv(baseIv: Uint8Array, chunkIndex: number): Uint8Array {
 }
 
 /**
- * Encrypt File using Chunked Architectural Streaming (Version 3)
+ * Builds V4 chunk AAD = full 42-byte header + 4-byte chunkIndex (LE) + 1-byte isFinal flag
+ */
+function buildV4ChunkAad(headerBytes: Uint8Array, chunkIndex: number, isFinal: number): Uint8Array {
+  const aad = new Uint8Array(V4_HEADER_SIZE + 5);
+  aad.set(headerBytes, 0);
+  const aadView = new DataView(aad.buffer);
+  aadView.setUint32(V4_HEADER_SIZE, chunkIndex, true);
+  aadView.setUint8(V4_HEADER_SIZE + 4, isFinal);
+  return aad;
+}
+
+/**
+ * Encrypt File using Chunked Architectural Streaming (Version 4)
  * Peak Memory: ~4MB regardless of file size (supports multi-gigabyte files without browser OOM crashes)
+ * Metadata (including filename) is encrypted in Chunk 0; no timestamps are stored anywhere.
  */
 export async function encryptFile(
   file: File,
@@ -360,61 +395,67 @@ export async function encryptFile(
     type: file.type || 'application/octet-stream',
     compressed: false,
     size: file.size,
-    encryptedAt: Date.now(),
-    version: 3,
+    version: 4,
     chunked: true,
     chunkSize,
   };
 
   const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
-  const metadataLength = metadataBytes.length;
 
-  // Build V3 Header:
-  // 0..5: Magic "ZERO\x03\x00" (6B)
+  // Build V4 Fixed Plaintext Header (42 bytes, no plaintext metadata or timestamps):
+  // 0..5: Magic "ZERO\x04\x00" (6B)
   // 6..9: Iterations uint32 LE (4B)
   // 10..13: ChunkSize uint32 LE (4B)
-  // 14..17: MetadataLength uint32 LE (4B)
-  // 18..(18+metadataLength): Metadata UTF-8 JSON
-  // Salt (16B) + BaseIV (12B)
-  const headerSize = 6 + 4 + 4 + 4 + metadataLength + 16 + 12;
-  const headerBuffer = new ArrayBuffer(headerSize);
+  // 14..29: Salt (16B)
+  // 30..41: BaseIV (12B)
+  const headerBuffer = new ArrayBuffer(V4_HEADER_SIZE);
   const headerView = new DataView(headerBuffer);
   const headerArray = new Uint8Array(headerBuffer);
 
-  headerArray.set(MAGIC_V3, 0);
+  headerArray.set(MAGIC_V4, 0);
   headerView.setUint32(6, iterations, true);
   headerView.setUint32(10, chunkSize, true);
-  headerView.setUint32(14, metadataLength, true);
-  headerArray.set(metadataBytes, 18);
-
-  const saltOffset = 18 + metadataLength;
-  headerArray.set(salt, saltOffset);
-
-  const ivOffset = saltOffset + 16;
-  headerArray.set(baseIv, ivOffset);
+  headerArray.set(salt, 14);
+  headerArray.set(baseIv, 30);
 
   const blobParts: BlobPart[] = [headerBuffer];
 
-  // Process file in memory-safe 2MB chunks
+  // Encrypt metadata as Chunk 0 (chunkIndex = 0, isFinal = 0), authenticated with full 42B header
+  const metaAad = buildV4ChunkAad(headerArray, 0, 0);
+
+  const encryptedMetadataBuffer = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: deriveChunkIv(baseIv, 0) as unknown as BufferSource,
+      additionalData: metaAad as unknown as BufferSource,
+    },
+    key,
+    metadataBytes as unknown as BufferSource
+  );
+
+  const metaLenBuffer = new ArrayBuffer(4);
+  new DataView(metaLenBuffer).setUint32(0, encryptedMetadataBuffer.byteLength, true);
+  blobParts.push(metaLenBuffer);
+  blobParts.push(encryptedMetadataBuffer);
+
+  // Process file in memory-safe 2MB chunks starting at chunkIndex = 1
   const totalChunks = Math.ceil(file.size / chunkSize) || 1;
   let processedBytes = 0;
 
   onProgress?.({ percent: 15, stage: 'encrypting' });
 
-  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-    const start = chunkIndex * chunkSize;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkIndex = i + 1;
+    const start = i * chunkSize;
     const end = Math.min(file.size, start + chunkSize);
     const sliceBlob = file.slice(start, end);
     const sliceBuffer = await sliceBlob.arrayBuffer();
 
     const chunkIv = deriveChunkIv(baseIv, chunkIndex);
-    const isFinal = chunkIndex === totalChunks - 1 ? 1 : 0;
+    const isFinal = i === totalChunks - 1 ? 1 : 0;
 
-    // Authenticated Data per chunk: [ 4B chunkIndex ][ 1B isFinal ]
-    const aad = new Uint8Array(5);
-    const aadView = new DataView(aad.buffer);
-    aadView.setUint32(0, chunkIndex, true);
-    aadView.setUint8(4, isFinal);
+    // Authenticated Data per chunk: [ 42B header ][ 4B chunkIndex ][ 1B isFinal ]
+    const aad = buildV4ChunkAad(headerArray, chunkIndex, isFinal);
 
     const encryptedChunkBuffer = await crypto.subtle.encrypt(
       {
@@ -450,7 +491,8 @@ export async function encryptFile(
 }
 
 /**
- * Decrypt File supporting V3 Streaming, V2 Authenticated, and V1 Legacy Fallback
+ * Decrypt File supporting V4 Encrypted-Metadata Streaming, V3 Streaming, V2 Authenticated, and V1 Legacy Fallback.
+ * Every failure throws the single generic "Decryption failed" error.
  */
 export async function decryptFile(
   file: File,
@@ -458,85 +500,111 @@ export async function decryptFile(
   onProgress?: (progress: EncryptionProgress) => void,
   keyfileBuffer?: ArrayBuffer | null
 ): Promise<File> {
-  if (!password && !keyfileBuffer) {
-    throw new Error('Password or keyfile is required for file decryption');
-  }
-
-  onProgress?.({ percent: 5, stage: 'decrypting' });
-
-  // Read header prefix (first 256 bytes) to inspect magic
-  const headerSlice = await file.slice(0, Math.min(256, file.size)).arrayBuffer();
-  const headerBytes = new Uint8Array(headerSlice);
-
-  const isV3 =
-    headerBytes.length >= 6 &&
-    headerBytes[0] === 0x5A &&
-    headerBytes[1] === 0x45 &&
-    headerBytes[2] === 0x52 &&
-    headerBytes[3] === 0x4F &&
-    headerBytes[4] === 0x03 &&
-    headerBytes[5] === 0x00;
-
-  if (isV3) {
-    // V3 Chunked Architectural Streaming Decryption
-    const dataView = new DataView(headerSlice);
-    const iterations = dataView.getUint32(6, true);
-    const chunkSize = dataView.getUint32(10, true);
-    const metadataLength = dataView.getUint32(14, true);
-
-    const fullHeaderSize = 18 + metadataLength + 16 + 12;
-    const fullHeaderBuffer = await file.slice(0, fullHeaderSize).arrayBuffer();
-    const fullHeaderView = new DataView(fullHeaderBuffer);
-    const fullHeaderArray = new Uint8Array(fullHeaderBuffer);
-
-    const metadataBytes = fullHeaderArray.subarray(18, 18 + metadataLength);
-    let metadata: FileMetadata;
-    try {
-      metadata = JSON.parse(new TextDecoder('utf-8').decode(metadataBytes));
-    } catch {
-      throw new Error('Could not parse file metadata header: Corrupted archive');
+  try {
+    if (!password && !keyfileBuffer) {
+      throw new Error(DECRYPTION_FAILED_ERROR);
     }
 
-    const saltOffset = 18 + metadataLength;
-    const salt = fullHeaderArray.slice(saltOffset, saltOffset + 16);
-    const baseIv = fullHeaderArray.slice(saltOffset + 16, saltOffset + 16 + 12);
+    onProgress?.({ percent: 5, stage: 'decrypting' });
 
-    const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
+    // Read header prefix (first 256 bytes) to inspect magic
+    const headerSlice = await file.slice(0, Math.min(256, file.size)).arrayBuffer();
+    const headerBytes = new Uint8Array(headerSlice);
 
-    const decryptedBlobParts: BlobPart[] = [];
-    let fileOffset = fullHeaderSize;
-    let chunkIndex = 0;
-    const totalFileSize = file.size;
+    const isV4 =
+      headerBytes.length >= 6 &&
+      headerBytes[0] === 0x5A &&
+      headerBytes[1] === 0x45 &&
+      headerBytes[2] === 0x52 &&
+      headerBytes[3] === 0x4F &&
+      headerBytes[4] === 0x04 &&
+      headerBytes[5] === 0x00;
 
-    onProgress?.({ percent: 15, stage: 'decrypting' });
-
-    while (fileOffset < totalFileSize) {
-      if (fileOffset + 4 > totalFileSize) {
-        throw new Error('Truncated file archive during chunk header read');
+    if (isV4) {
+      if (headerBytes.length < V4_HEADER_SIZE) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
       }
 
-      const lenBuffer = await file.slice(fileOffset, fileOffset + 4).arrayBuffer();
-      const encChunkLen = new DataView(lenBuffer).getUint32(0, true);
+      const dataView = new DataView(headerSlice);
+      const iterations = dataView.getUint32(6, true);
+      const chunkSize = dataView.getUint32(10, true);
+
+      // Validate header bounds before running PBKDF2
+      if (
+        iterations < MIN_V4_PBKDF2_ITERATIONS ||
+        iterations > MAX_PBKDF2_ITERATIONS ||
+        chunkSize < MIN_STREAM_CHUNK_SIZE ||
+        chunkSize > MAX_STREAM_CHUNK_SIZE
+      ) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+
+      const v4HeaderBytes = headerBytes.slice(0, V4_HEADER_SIZE);
+      const salt = v4HeaderBytes.slice(14, 30);
+      const baseIv = v4HeaderBytes.slice(30, 42);
+
+      const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
+
+      const totalFileSize = file.size;
+      let fileOffset = V4_HEADER_SIZE;
+
+      // Decrypt Chunk 0: Encrypted FileMetadata (authenticated with full 42B header)
+      if (fileOffset + 4 > totalFileSize) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+      const metaLenBuffer = await file.slice(fileOffset, fileOffset + 4).arrayBuffer();
+      const metaEncLen = new DataView(metaLenBuffer).getUint32(0, true);
       fileOffset += 4;
 
-      if (fileOffset + encChunkLen > totalFileSize) {
-        throw new Error('Truncated chunk in encrypted file archive');
+      if (metaEncLen === 0 || fileOffset + metaEncLen > totalFileSize) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+      const encMetaBuffer = await file.slice(fileOffset, fileOffset + metaEncLen).arrayBuffer();
+      fileOffset += metaEncLen;
+
+      const metaAad = buildV4ChunkAad(v4HeaderBytes, 0, 0);
+      const decryptedMetaBuffer = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: deriveChunkIv(baseIv, 0) as unknown as BufferSource,
+          additionalData: metaAad as unknown as BufferSource,
+        },
+        key,
+        encMetaBuffer
+      );
+
+      const metadata: FileMetadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(decryptedMetaBuffer));
+
+      if (fileOffset >= totalFileSize) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
       }
 
-      const encChunkBuffer = await file.slice(fileOffset, fileOffset + encChunkLen).arrayBuffer();
-      fileOffset += encChunkLen;
+      const decryptedBlobParts: BlobPart[] = [];
+      let chunkIndex = 1;
 
-      const chunkIv = deriveChunkIv(baseIv, chunkIndex);
-      const isFinal = fileOffset >= totalFileSize ? 1 : 0;
+      onProgress?.({ percent: 15, stage: 'decrypting' });
 
-      const aad = new Uint8Array(5);
-      const aadView = new DataView(aad.buffer);
-      aadView.setUint32(0, chunkIndex, true);
-      aadView.setUint8(4, isFinal);
+      while (fileOffset < totalFileSize) {
+        if (fileOffset + 4 > totalFileSize) {
+          throw new Error(DECRYPTION_FAILED_ERROR);
+        }
 
-      let decryptedChunk: ArrayBuffer;
-      try {
-        decryptedChunk = await crypto.subtle.decrypt(
+        const lenBuffer = await file.slice(fileOffset, fileOffset + 4).arrayBuffer();
+        const encChunkLen = new DataView(lenBuffer).getUint32(0, true);
+        fileOffset += 4;
+
+        if (encChunkLen === 0 || fileOffset + encChunkLen > totalFileSize) {
+          throw new Error(DECRYPTION_FAILED_ERROR);
+        }
+
+        const encChunkBuffer = await file.slice(fileOffset, fileOffset + encChunkLen).arrayBuffer();
+        fileOffset += encChunkLen;
+
+        const chunkIv = deriveChunkIv(baseIv, chunkIndex);
+        const isFinal = fileOffset >= totalFileSize ? 1 : 0;
+        const aad = buildV4ChunkAad(v4HeaderBytes, chunkIndex, isFinal);
+
+        const decryptedChunk = await crypto.subtle.decrypt(
           {
             name: 'AES-GCM',
             iv: chunkIv as unknown as BufferSource,
@@ -545,107 +613,203 @@ export async function decryptFile(
           key,
           encChunkBuffer
         );
-      } catch {
-        throw new Error('Decryption failed: Incorrect password/keyfile or tampered data chunk.');
+
+        decryptedBlobParts.push(decryptedChunk);
+        chunkIndex++;
+
+        const pct = Math.min(95, Math.round(15 + (fileOffset / Math.max(1, totalFileSize)) * 80));
+        onProgress?.({ percent: pct, stage: 'decrypting' });
       }
 
-      decryptedBlobParts.push(decryptedChunk);
-      chunkIndex++;
+      onProgress?.({ percent: 100, stage: 'idle' });
 
-      const pct = Math.min(95, Math.round(15 + (fileOffset / Math.max(1, totalFileSize)) * 80));
-      onProgress?.({ percent: pct, stage: 'decrypting' });
+      let reconstructedName = sanitizeFilename(metadata.name || file.name.replace(/\.encc$/i, ''));
+      if (!reconstructedName) reconstructedName = 'decrypted_file';
+
+      const resultBlob = new Blob(decryptedBlobParts, { type: metadata.type || 'application/octet-stream' });
+      return new File([resultBlob], reconstructedName, { type: metadata.type || 'application/octet-stream' });
     }
 
-    onProgress?.({ percent: 100, stage: 'idle' });
+    const isV3 =
+      headerBytes.length >= 6 &&
+      headerBytes[0] === 0x5A &&
+      headerBytes[1] === 0x45 &&
+      headerBytes[2] === 0x52 &&
+      headerBytes[3] === 0x4F &&
+      headerBytes[4] === 0x03 &&
+      headerBytes[5] === 0x00;
 
-    let reconstructedName = sanitizeFilename(metadata.name || file.name.replace(/\.encc$/i, ''));
-    if (!reconstructedName) reconstructedName = 'decrypted_file';
+    if (isV3) {
+      if (headerBytes.length < 18) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+      // V3 Chunked Architectural Streaming Decryption (legacy backward compatibility; ignores encryptedAt)
+      const dataView = new DataView(headerSlice);
+      const iterations = dataView.getUint32(6, true);
+      const chunkSize = dataView.getUint32(10, true);
+      const metadataLength = dataView.getUint32(14, true);
 
-    const resultBlob = new Blob(decryptedBlobParts, { type: metadata.type || 'application/octet-stream' });
-    return new File([resultBlob], reconstructedName, { type: metadata.type || 'application/octet-stream' });
-  }
+      if (
+        iterations < LEGACY_PBKDF2_ITERATIONS ||
+        iterations > MAX_PBKDF2_ITERATIONS ||
+        chunkSize < MIN_STREAM_CHUNK_SIZE ||
+        chunkSize > MAX_STREAM_CHUNK_SIZE ||
+        metadataLength <= 0 ||
+        18 + metadataLength + 28 > file.size
+      ) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
 
-  // Single-pass Fallback for V2 & V1 Legacy Files
-  const arrayBuffer = await file.arrayBuffer();
-  if (arrayBuffer.byteLength < 32) {
-    throw new Error('Invalid file: File size is smaller than required header length');
-  }
+      const fullHeaderSize = 18 + metadataLength + 16 + 12;
+      const fullHeaderBuffer = await file.slice(0, fullHeaderSize).arrayBuffer();
+      const fullHeaderArray = new Uint8Array(fullHeaderBuffer);
 
-  const fullBytes = new Uint8Array(arrayBuffer);
-  const isV2 =
-    fullBytes.length >= 6 &&
-    fullBytes[0] === 0x5A &&
-    fullBytes[1] === 0x45 &&
-    fullBytes[2] === 0x52 &&
-    fullBytes[3] === 0x4F &&
-    fullBytes[4] === 0x02 &&
-    fullBytes[5] === 0x00;
+      const metadataBytes = fullHeaderArray.subarray(18, 18 + metadataLength);
+      const metadata: FileMetadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
 
-  let metadata: FileMetadata;
-  let metadataBytes: Uint8Array;
-  let salt: Uint8Array;
-  let iv: Uint8Array;
-  let ciphertext: Uint8Array;
-  let iterations = DEFAULT_PBKDF2_ITERATIONS;
-  let useAad = false;
+      const saltOffset = 18 + metadataLength;
+      const salt = fullHeaderArray.slice(saltOffset, saltOffset + 16);
+      const baseIv = fullHeaderArray.slice(saltOffset + 16, saltOffset + 16 + 12);
 
-  if (isV2) {
-    const dataView = new DataView(arrayBuffer);
-    iterations = dataView.getUint32(6, true);
-    const metadataLength = dataView.getUint32(10, true);
+      const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
 
-    if (metadataLength <= 0 || 14 + metadataLength + 28 > arrayBuffer.byteLength) {
-      throw new Error('Invalid or corrupted V2 encrypted file header');
+      const decryptedBlobParts: BlobPart[] = [];
+      let fileOffset = fullHeaderSize;
+      let chunkIndex = 0;
+      const totalFileSize = file.size;
+
+      if (fileOffset >= totalFileSize) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+
+      onProgress?.({ percent: 15, stage: 'decrypting' });
+
+      while (fileOffset < totalFileSize) {
+        if (fileOffset + 4 > totalFileSize) {
+          throw new Error(DECRYPTION_FAILED_ERROR);
+        }
+
+        const lenBuffer = await file.slice(fileOffset, fileOffset + 4).arrayBuffer();
+        const encChunkLen = new DataView(lenBuffer).getUint32(0, true);
+        fileOffset += 4;
+
+        if (encChunkLen === 0 || fileOffset + encChunkLen > totalFileSize) {
+          throw new Error(DECRYPTION_FAILED_ERROR);
+        }
+
+        const encChunkBuffer = await file.slice(fileOffset, fileOffset + encChunkLen).arrayBuffer();
+        fileOffset += encChunkLen;
+
+        const chunkIv = deriveChunkIv(baseIv, chunkIndex);
+        const isFinal = fileOffset >= totalFileSize ? 1 : 0;
+
+        const aad = new Uint8Array(5);
+        const aadView = new DataView(aad.buffer);
+        aadView.setUint32(0, chunkIndex, true);
+        aadView.setUint8(4, isFinal);
+
+        const decryptedChunk = await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: chunkIv as unknown as BufferSource,
+            additionalData: aad as unknown as BufferSource,
+          },
+          key,
+          encChunkBuffer
+        );
+
+        decryptedBlobParts.push(decryptedChunk);
+        chunkIndex++;
+
+        const pct = Math.min(95, Math.round(15 + (fileOffset / Math.max(1, totalFileSize)) * 80));
+        onProgress?.({ percent: pct, stage: 'decrypting' });
+      }
+
+      onProgress?.({ percent: 100, stage: 'idle' });
+
+      let reconstructedName = sanitizeFilename(metadata.name || file.name.replace(/\.encc$/i, ''));
+      if (!reconstructedName) reconstructedName = 'decrypted_file';
+
+      const resultBlob = new Blob(decryptedBlobParts, { type: metadata.type || 'application/octet-stream' });
+      return new File([resultBlob], reconstructedName, { type: metadata.type || 'application/octet-stream' });
     }
 
-    metadataBytes = fullBytes.subarray(14, 14 + metadataLength);
-    try {
-      metadata = JSON.parse(new TextDecoder('utf-8').decode(metadataBytes));
-    } catch {
-      throw new Error('Could not parse file metadata header: Corrupted archive');
+    // Single-pass Fallback for V2 & V1 Legacy Files
+    const arrayBuffer = await file.arrayBuffer();
+    if (arrayBuffer.byteLength < 32) {
+      throw new Error(DECRYPTION_FAILED_ERROR);
     }
 
-    const saltOffset = 14 + metadataLength;
-    const ivOffset = saltOffset + 16;
-    const ciphertextOffset = ivOffset + 12;
+    const fullBytes = new Uint8Array(arrayBuffer);
+    const isV2 =
+      fullBytes.length >= 6 &&
+      fullBytes[0] === 0x5A &&
+      fullBytes[1] === 0x45 &&
+      fullBytes[2] === 0x52 &&
+      fullBytes[3] === 0x4F &&
+      fullBytes[4] === 0x02 &&
+      fullBytes[5] === 0x00;
 
-    salt = fullBytes.slice(saltOffset, saltOffset + 16);
-    iv = fullBytes.slice(ivOffset, ivOffset + 12);
-    ciphertext = fullBytes.slice(ciphertextOffset);
-    useAad = true;
-  } else {
-    // V1 Legacy Fallback
-    const dataView = new DataView(arrayBuffer);
-    const metadataLength = dataView.getUint32(0, true);
+    let metadata: FileMetadata;
+    let metadataBytes: Uint8Array;
+    let salt: Uint8Array;
+    let iv: Uint8Array;
+    let ciphertext: Uint8Array;
+    let iterations = DEFAULT_PBKDF2_ITERATIONS;
+    let useAad = false;
 
-    if (metadataLength <= 0 || 4 + metadataLength + 28 > arrayBuffer.byteLength) {
-      throw new Error('Invalid or corrupted encrypted file header');
+    if (isV2) {
+      const dataView = new DataView(arrayBuffer);
+      iterations = dataView.getUint32(6, true);
+      const metadataLength = dataView.getUint32(10, true);
+
+      if (
+        iterations < LEGACY_PBKDF2_ITERATIONS ||
+        iterations > MAX_PBKDF2_ITERATIONS ||
+        metadataLength <= 0 ||
+        14 + metadataLength + 28 > arrayBuffer.byteLength
+      ) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+
+      metadataBytes = fullBytes.subarray(14, 14 + metadataLength);
+      metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
+
+      const saltOffset = 14 + metadataLength;
+      const ivOffset = saltOffset + 16;
+      const ciphertextOffset = ivOffset + 12;
+
+      salt = fullBytes.slice(saltOffset, saltOffset + 16);
+      iv = fullBytes.slice(ivOffset, ivOffset + 12);
+      ciphertext = fullBytes.slice(ciphertextOffset);
+      useAad = true;
+    } else {
+      // V1 Legacy Fallback
+      const dataView = new DataView(arrayBuffer);
+      const metadataLength = dataView.getUint32(0, true);
+
+      if (metadataLength <= 0 || 4 + metadataLength + 28 > arrayBuffer.byteLength) {
+        throw new Error(DECRYPTION_FAILED_ERROR);
+      }
+
+      metadataBytes = fullBytes.subarray(4, 4 + metadataLength);
+      metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
+
+      const saltOffset = 4 + metadataLength;
+      const ivOffset = saltOffset + 16;
+      const ciphertextOffset = ivOffset + 12;
+
+      salt = fullBytes.slice(saltOffset, saltOffset + 16);
+      iv = fullBytes.slice(ivOffset, ivOffset + 12);
+      ciphertext = fullBytes.slice(ciphertextOffset);
+      iterations = LEGACY_PBKDF2_ITERATIONS;
+      useAad = false;
     }
 
-    metadataBytes = fullBytes.subarray(4, 4 + metadataLength);
-    try {
-      metadata = JSON.parse(new TextDecoder('utf-8').decode(metadataBytes));
-    } catch {
-      throw new Error('Could not parse file metadata header: Corrupted archive');
-    }
+    onProgress?.({ percent: 35, stage: 'decrypting' });
 
-    const saltOffset = 4 + metadataLength;
-    const ivOffset = saltOffset + 16;
-    const ciphertextOffset = ivOffset + 12;
+    const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
 
-    salt = fullBytes.slice(saltOffset, saltOffset + 16);
-    iv = fullBytes.slice(ivOffset, ivOffset + 12);
-    ciphertext = fullBytes.slice(ciphertextOffset);
-    iterations = LEGACY_PBKDF2_ITERATIONS;
-    useAad = false;
-  }
-
-  onProgress?.({ percent: 35, stage: 'decrypting' });
-
-  const key = await deriveKey(password, salt, ['decrypt'], keyfileBuffer, iterations);
-
-  let decryptedBuffer: ArrayBuffer;
-  try {
     const decryptParams: AesGcmParams = {
       name: 'AES-GCM',
       iv: iv as unknown as BufferSource,
@@ -654,46 +818,42 @@ export async function decryptFile(
       decryptParams.additionalData = metadataBytes as unknown as BufferSource;
     }
 
-    decryptedBuffer = await crypto.subtle.decrypt(decryptParams, key, ciphertext as unknown as BufferSource);
-  } catch {
-    if (isV2) {
-      throw new Error('Decryption failed: Incorrect password/keyfile or tampered metadata header.');
+    const decryptedBuffer = await crypto.subtle.decrypt(decryptParams, key, ciphertext as unknown as BufferSource);
+
+    onProgress?.({ percent: 65, stage: 'decompressing' });
+
+    let finalBytes: Uint8Array;
+    if (metadata.compressed && typeof DecompressionStream !== 'undefined') {
+      try {
+        const stream = new Response(decryptedBuffer).body;
+        if (!stream) throw new Error('Stream empty');
+        const decompressedStream = stream.pipeThrough(new DecompressionStream('gzip'));
+        const maxDecompressedBytes = Math.max((metadata.size || 0) * 10, 2 * 1024 * 1024 * 1024);
+        finalBytes = await streamToUint8Array(decompressedStream, maxDecompressedBytes);
+      } catch {
+        finalBytes = new Uint8Array(decryptedBuffer);
+      }
     } else {
-      throw new Error('Decryption failed: Incorrect password or corrupted file data');
-    }
-  }
-
-  onProgress?.({ percent: 65, stage: 'decompressing' });
-
-  let finalBytes: Uint8Array;
-  if (metadata.compressed && typeof DecompressionStream !== 'undefined') {
-    try {
-      const stream = new Response(decryptedBuffer).body;
-      if (!stream) throw new Error('Stream empty');
-      const decompressedStream = stream.pipeThrough(new DecompressionStream('gzip'));
-      const maxDecompressedBytes = Math.max((metadata.size || 0) * 10, 2 * 1024 * 1024 * 1024);
-      finalBytes = await streamToUint8Array(decompressedStream, maxDecompressedBytes);
-    } catch {
       finalBytes = new Uint8Array(decryptedBuffer);
     }
-  } else {
-    finalBytes = new Uint8Array(decryptedBuffer);
+
+    onProgress?.({ percent: 95, stage: 'finalizing' });
+
+    let reconstructedName = sanitizeFilename(metadata.name || file.name.replace(/\.encc$/i, ''));
+    if (!reconstructedName) {
+      reconstructedName = 'decrypted_file';
+    }
+
+    const restoredFile = new File([finalBytes as BlobPart], reconstructedName, {
+      type: metadata.type || 'application/octet-stream',
+    });
+
+    onProgress?.({ percent: 100, stage: 'idle' });
+
+    return restoredFile;
+  } catch {
+    throw new Error(DECRYPTION_FAILED_ERROR);
   }
-
-  onProgress?.({ percent: 95, stage: 'finalizing' });
-
-  let reconstructedName = sanitizeFilename(metadata.name || file.name.replace(/\.encc$/i, ''));
-  if (!reconstructedName) {
-    reconstructedName = 'decrypted_file';
-  }
-
-  const restoredFile = new File([finalBytes as BlobPart], reconstructedName, {
-    type: metadata.type || 'application/octet-stream',
-  });
-
-  onProgress?.({ percent: 100, stage: 'idle' });
-
-  return restoredFile;
 }
 
 /**

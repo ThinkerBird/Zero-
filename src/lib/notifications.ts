@@ -3,21 +3,30 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
-
-interface NativeFileManagerPlugin {
-  openDownloads(): Promise<void>;
-}
-
-// Native Android plugin registered in MainActivity.java to fire android.intent.action.VIEW_DOWNLOADS
-const NativeFileManager = registerPlugin<NativeFileManagerPlugin>('NativeFileManager');
+import { NativeFileManager } from './nativeFileManager';
 
 let hasRequestedPermission = false;
 let isChannelCreated = false;
 let isListenerRegistered = false;
 
 const NOTIFICATION_CHANNEL_ID = 'zero_operations';
+
+async function ensureNotificationChannel(): Promise<void> {
+  if (!Capacitor.isNativePlatform() || isChannelCreated) {
+    return;
+  }
+  await LocalNotifications.createChannel({
+    id: NOTIFICATION_CHANNEL_ID,
+    name: 'Cryptographic Operations',
+    description: 'Notifies when Zero file encryption or decryption completes or fails.',
+    importance: 4, // High importance (banners & sounds)
+    visibility: 1, // Public on lockscreen (safe since no sensitive info is included)
+    vibration: true,
+  });
+  isChannelCreated = true;
+}
 
 /**
  * Initializes notification listeners and channels.
@@ -26,18 +35,7 @@ const NOTIFICATION_CHANNEL_ID = 'zero_operations';
 export async function initNotifications(onNotificationTap?: (info: { actionId?: string }) => void): Promise<void> {
   if (Capacitor.isNativePlatform()) {
     try {
-      // Create Android Notification Channel
-      if (!isChannelCreated) {
-        await LocalNotifications.createChannel({
-          id: NOTIFICATION_CHANNEL_ID,
-          name: 'Cryptographic Operations',
-          description: 'Notifies when Zero file encryption or decryption completes or fails.',
-          importance: 4, // High importance (banners & sounds)
-          visibility: 1, // Public on lockscreen (safe since no sensitive info is included)
-          vibration: true,
-        });
-        isChannelCreated = true;
-      }
+      await ensureNotificationChannel();
 
       // Listen for notification tap action
       if (!isListenerRegistered) {
@@ -172,6 +170,7 @@ export async function notifyOperationComplete({
   // 1. Native Capacitor
   if (Capacitor.isNativePlatform()) {
     try {
+      await ensureNotificationChannel();
       const id = Math.floor(Math.random() * 1000000) + 1;
       await LocalNotifications.schedule({
         notifications: [
@@ -180,7 +179,7 @@ export async function notifyOperationComplete({
             title,
             body,
             channelId: NOTIFICATION_CHANNEL_ID,
-            smallIcon: 'ic_stat_icon_config_sample',
+            autoCancel: true,
             extra: {
               type,
               success,

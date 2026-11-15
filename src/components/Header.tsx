@@ -7,6 +7,7 @@ interface HeaderProps {
   theme: AppTheme;
   onThemeChange: (theme: AppTheme) => void;
   onEmergencyWipe: () => void;
+  isProcessing?: boolean;
   inactivityRemaining?: number;
   autoClearEnabled: boolean;
   onToggleAutoClear: () => void;
@@ -16,6 +17,7 @@ export const Header: React.FC<HeaderProps> = ({
   theme,
   onThemeChange,
   onEmergencyWipe,
+  isProcessing = false,
   inactivityRemaining,
   autoClearEnabled,
   onToggleAutoClear,
@@ -60,9 +62,19 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Emergency Wipe Button */}
           <button
+            type="button"
             onClick={onEmergencyWipe}
-            className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error-bg)] border border-transparent hover:border-[var(--color-error)]/30 transition-all focus-ring"
-            title="Emergency Wipe (Ctrl+Shift+L)"
+            disabled={isProcessing}
+            className={`p-2 rounded-lg border border-transparent transition-all focus-ring ${
+              isProcessing
+                ? 'text-[var(--text-muted)] opacity-40 cursor-not-allowed'
+                : 'text-[var(--text-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error-bg)] hover:border-[var(--color-error)]/30'
+            }`}
+            title={
+              isProcessing
+                ? 'Emergency Wipe disabled while encrypting or decrypting'
+                : 'Emergency Wipe (Ctrl+Shift+L)'
+            }
             aria-label="Emergency Wipe buffer (Shortcut: Ctrl+Shift+L)"
           >
             <Trash2 className="w-4 h-4" />

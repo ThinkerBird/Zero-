@@ -25,6 +25,12 @@ import {
   requestNotificationPermissionOnUserAction,
   notifyOperationComplete,
 } from './lib/notifications';
+import {
+  AUTO_CLEAR_TIMEOUT_SECONDS,
+  evaluateInactivityTick,
+  shouldAllowEmergencyWipe,
+} from './lib/securityTimer';
+import { startBackgroundProcessing, stopBackgroundProcessing } from './lib/backgroundTask';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { ModeTabs } from './components/ModeTabs';
@@ -89,13 +95,14 @@ export default function App() {
   const [payloadType, setPayloadType] = useState<PayloadType>('text');
   const [autoDownload, setAutoDownload] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const isProcessingRef = useRef(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [autoClearBanner, setAutoClearBanner] = useState<string | null>(null);
 
   // 3. Auto-Clear 60s Inactivity Security Feature
   const [autoClearEnabled, setAutoClearEnabled] = useState(true);
-  const [inactivityRemaining, setInactivityRemaining] = useState(60);
+  const [inactivityRemaining, setInactivityRemaining] = useState(AUTO_CLEAR_TIMEOUT_SECONDS);
   const lastActivityRef = useRef<number>(Date.now());
 
   // Toast dispatch helper
@@ -136,8 +143,11 @@ export default function App() {
     }
   }, [addToast]);
 
-  // Emergency Wipe Function
+  // Emergency Wipe Function (never activates while encrypting or decrypting)
   const handleEmergencyWipe = useCallback(() => {
+    if (!shouldAllowEmergencyWipe(isProcessingRef.current)) {
+      return;
+    }
     setInputText('');
     setOutputText('');
     setPassword('');
@@ -196,11 +206,11 @@ export default function App() {
     }
   };
 
-  // Inactivity tracking
+  // Inactivity tracking (paused automatically while encryption/decryption is active)
   useEffect(() => {
     const markActivity = () => {
       lastActivityRef.current = Date.now();
-      setInactivityRemaining(60);
+      setInactivityRemaining(AUTO_CLEAR_TIMEOUT_SECONDS);
     };
 
     window.addEventListener('mousemove', markActivity);
@@ -209,12 +219,18 @@ export default function App() {
     window.addEventListener('touchstart', markActivity);
 
     const interval = setInterval(() => {
-      if (!autoClearEnabled) return;
-      const elapsed = Math.floor((Date.now() - lastActivityRef.current) / 1000);
-      const remaining = Math.max(0, 60 - elapsed);
-      setInactivityRemaining(remaining);
+      const evalResult = evaluateInactivityTick({
+        autoClearEnabled,
+        isProcessing: isProcessing || isProcessingRef.current,
+        nowMs: Date.now(),
+        lastActivityMs: lastActivityRef.current,
+        hasSensitiveData: Boolean(password || keyfile || inputText || outputText || files.length > 0),
+      });
 
-      if (remaining === 0 && (password || keyfile || inputText || outputText || files.length > 0)) {
+      lastActivityRef.current = evalResult.nextLastActivityMs;
+      setInactivityRemaining(evalResult.remainingSeconds);
+
+      if (evalResult.shouldAutoClear) {
         setInputText('');
         setOutputText('');
         setPassword('');
@@ -223,8 +239,6 @@ export default function App() {
         setKeyfileFingerprint(null);
         setFiles([]);
         setIsQrModalOpen(false);
-        lastActivityRef.current = Date.now();
-        setInactivityRemaining(60);
         setAutoClearBanner('Buffer auto-cleared due to 60s of inactivity to prevent physical surveillance.');
         addToast('Buffer Auto-Cleared', 'Cleared after 60s of inactivity for zero-knowledge safety.', 'info');
       }
@@ -237,7 +251,7 @@ export default function App() {
       window.removeEventListener('touchstart', markActivity);
       clearInterval(interval);
     };
-  }, [autoClearEnabled, password, inputText, outputText, files.length, addToast]);
+  }, [autoClearEnabled, isProcessing, password, keyfile, inputText, outputText, files.length, addToast]);
 
   const passwordStrength = useMemo(() => {
     return calculatePasswordStrength(password);
@@ -302,16 +316,21 @@ export default function App() {
       return;
     }
 
-    // Request notification permission once upon user action (never on initial page load)
-    await requestNotificationPermissionOnUserAction();
+    if (isProcessingRef.current) {
+      return;
+    }
 
+    isProcessingRef.current = true;
     setIsProcessing(true);
+    let backgroundServiceStarted = false;
 
     try {
+      // Request notification permission once upon user action (never on initial page load)
+      await requestNotificationPermissionOnUserAction();
+
       if (payloadType === 'text') {
         if (!inputText.trim()) {
           addToast('Input Required', 'Please provide text to process.', 'warning');
-          setIsProcessing(false);
           return;
         }
 
@@ -331,16 +350,17 @@ export default function App() {
       } else {
         if (files.length === 0) {
           addToast('No Files Attached', 'Please select or drag files into the drop zone.', 'warning');
-          setIsProcessing(false);
           return;
         }
 
         const pendingFiles = files.filter((f) => f.status !== 'completed');
         if (pendingFiles.length === 0) {
           addToast('Files Already Processed', 'All attached files have already been processed.', 'info');
-          setIsProcessing(false);
           return;
         }
+
+        await startBackgroundProcessing(mode);
+        backgroundServiceStarted = true;
 
         for (const item of files) {
           if (item.status === 'completed') continue;
@@ -378,26 +398,30 @@ export default function App() {
                 )
               );
 
+              let savedFilename = fileName;
+              let saveSuccess = true;
               if (autoDownload) {
                 const saveRes = await saveFile(blob, fileName);
+                saveSuccess = saveRes.success;
+                savedFilename = saveRes.filename || fileName;
                 if (saveRes.success) {
                   addToast(
                     'File Saved',
                     saveRes.method === 'native'
-                      ? `${fileName} saved to Documents directory.`
-                      : `${fileName} downloaded.`,
+                      ? `${savedFilename} saved to device storage.`
+                      : `${savedFilename} downloaded.`,
                     'success'
                   );
                 } else {
-                  addToast('Save Notice', saveRes.error || 'Could not auto-download file.', 'warning');
+                  addToast('Save Notice', saveRes.error || 'Could not save file to storage.', 'warning');
                 }
               }
 
               // Send completion notification (safe, never includes keys or passwords)
               await notifyOperationComplete({
                 type: 'encrypt',
-                filename: fileName,
-                success: true,
+                filename: savedFilename,
+                success: saveSuccess,
               });
             } else {
               const restoredFile = await decryptFile(
@@ -427,26 +451,30 @@ export default function App() {
                 )
               );
 
+              let savedFilename = restoredFile.name;
+              let saveSuccess = true;
               if (autoDownload) {
                 const saveRes = await saveFile(restoredFile, restoredFile.name);
+                saveSuccess = saveRes.success;
+                savedFilename = saveRes.filename || restoredFile.name;
                 if (saveRes.success) {
                   addToast(
                     'File Restored & Saved',
                     saveRes.method === 'native'
-                      ? `${restoredFile.name} saved to Documents directory.`
-                      : `${restoredFile.name} downloaded.`,
+                      ? `${savedFilename} saved to device storage.`
+                      : `${savedFilename} downloaded.`,
                     'success'
                   );
                 } else {
-                  addToast('Save Notice', saveRes.error || 'Could not auto-download file.', 'warning');
+                  addToast('Save Notice', saveRes.error || 'Could not save file to storage.', 'warning');
                 }
               }
 
               // Send completion notification (safe, never includes keys or passwords)
               await notifyOperationComplete({
                 type: 'decrypt',
-                filename: restoredFile.name,
-                success: true,
+                filename: savedFilename,
+                success: saveSuccess,
               });
             }
           } catch (fileErr: unknown) {
@@ -477,6 +505,12 @@ export default function App() {
       const errMessage = err instanceof Error ? err.message : 'Cryptographic operation failed';
       addToast('Operation Failed', errMessage, 'error');
     } finally {
+      if (backgroundServiceStarted) {
+        await stopBackgroundProcessing();
+      }
+      isProcessingRef.current = false;
+      lastActivityRef.current = Date.now();
+      setInactivityRemaining(AUTO_CLEAR_TIMEOUT_SECONDS);
       setIsProcessing(false);
     }
   };
@@ -654,6 +688,7 @@ export default function App() {
         theme={theme}
         onThemeChange={updateTheme}
         onEmergencyWipe={handleEmergencyWipe}
+        isProcessing={isProcessing}
         inactivityRemaining={inactivityRemaining}
         autoClearEnabled={autoClearEnabled}
         onToggleAutoClear={() => setAutoClearEnabled(!autoClearEnabled)}

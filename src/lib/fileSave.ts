@@ -5,6 +5,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import { NativeFileManager } from './nativeFileManager';
 
 export interface FileSaveResult {
   success: boolean;
@@ -13,6 +14,9 @@ export interface FileSaveResult {
   pathOrUri?: string;
   error?: string;
 }
+
+// 768 KB binary chunk (multiple of 3 -> clean 1 MB base64 string per Capacitor bridge call)
+export const NATIVE_SAVE_CHUNK_SIZE = 768 * 1024;
 
 /**
  * Sanitizes filename to prevent path traversal or invalid characters.
@@ -25,30 +29,88 @@ export function sanitizeFilename(filename: string): string {
 }
 
 /**
- * Converts a Blob or File to a base64 string using FileReader.
- * This utilizes native browser streaming to prevent memory crashes on large files.
+ * Encodes a single small ArrayBuffer chunk to base64 without call stack overflow.
  */
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const dataUrl = reader.result as string;
-      if (!dataUrl) {
-        reject(new Error('Failed to convert file to base64'));
-        return;
-      }
-      const commaIndex = dataUrl.indexOf(',');
-      if (commaIndex !== -1) {
-        resolve(dataUrl.substring(commaIndex + 1));
-      } else {
-        resolve(dataUrl);
-      }
-    };
-    reader.onerror = () => {
-      reject(reader.error || new Error('FileReader error'));
-    };
-    reader.readAsDataURL(blob);
+export function chunkBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length === 0) return '';
+  const subChunkSize = 0x8000; // 32 KB
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += subChunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + subChunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, slice as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Streams a Blob in fixed-size base64 chunks so peak memory stays ~2 MB regardless of total file size.
+ */
+export async function streamBlobInBase64Chunks(
+  blob: Blob,
+  chunkSize: number,
+  onChunk: (base64Chunk: string, chunkIndex: number) => Promise<void>
+): Promise<void> {
+  if (blob.size === 0) {
+    await onChunk('', 0);
+    return;
+  }
+
+  let offset = 0;
+  let chunkIndex = 0;
+  while (offset < blob.size) {
+    const end = Math.min(blob.size, offset + chunkSize);
+    const chunkBuffer = await blob.slice(offset, end).arrayBuffer();
+    const base64Chunk = chunkBufferToBase64(chunkBuffer);
+    await onChunk(base64Chunk, chunkIndex);
+    offset = end;
+    chunkIndex++;
+  }
+}
+
+async function saveViaNativeStream(blob: Blob, filename: string): Promise<{ uri: string; filename: string }> {
+  const { streamId, filename: savedName } = await NativeFileManager.beginSaveFile({
+    filename,
+    mimeType: blob.type || 'application/octet-stream',
   });
+
+  try {
+    await streamBlobInBase64Chunks(blob, NATIVE_SAVE_CHUNK_SIZE, async (base64Chunk) => {
+      if (base64Chunk.length > 0) {
+        await NativeFileManager.writeSaveChunk({ streamId, data: base64Chunk });
+      }
+    });
+    const finishRes = await NativeFileManager.finishSaveFile({ streamId });
+    return {
+      uri: finishRes.uri,
+      filename: finishRes.filename || savedName || filename,
+    };
+  } catch (err) {
+    await NativeFileManager.abortSaveFile({ streamId }).catch(() => {});
+    throw err;
+  }
+}
+
+async function saveViaChunkedFilesystem(blob: Blob, filename: string, directory: Directory): Promise<string> {
+  await streamBlobInBase64Chunks(blob, NATIVE_SAVE_CHUNK_SIZE, async (base64Chunk, chunkIndex) => {
+    if (chunkIndex === 0) {
+      await Filesystem.writeFile({
+        path: filename,
+        data: base64Chunk,
+        directory,
+        recursive: true,
+      });
+    } else if (base64Chunk.length > 0) {
+      await Filesystem.appendFile({
+        path: filename,
+        data: base64Chunk,
+        directory,
+      });
+    }
+  });
+
+  const uriRes = await Filesystem.getUri({ path: filename, directory });
+  return uriRes.uri;
 }
 
 // Keep track of active object URLs so we don't revoke them before the browser finishes writing
@@ -100,7 +162,8 @@ export function triggerBrowserDownload(blob: Blob | File, rawFilename: string): 
 /**
  * Single shared file saving utility for both encryption output and decrypted restored files.
  * Works uniformly across:
- * - Native Android/Capacitor: Saves via @capacitor/filesystem to Public Documents directory.
+ * - Native Android/Capacitor: Streams in 768 KB chunks via NativeFileManager (MediaStore/Documents)
+ *   or chunked @capacitor/filesystem so large files never cause WebView/Java OOM crashes.
  * - Desktop Chrome/Firefox/Safari: Triggers download via <a download> without early URL revocation.
  * - Mobile Android Chrome / iOS Safari: Synchronous download + Web Share API fallback.
  */
@@ -110,36 +173,53 @@ export async function saveFile(blob: Blob | File, rawFilename: string): Promise<
   // 1. Native Capacitor Environment
   if (Capacitor.isNativePlatform()) {
     try {
-      // Check & request storage permissions if necessary
+      const nativeResult = await saveViaNativeStream(blob, filename);
+      return {
+        success: true,
+        method: 'native',
+        filename: nativeResult.filename,
+        pathOrUri: nativeResult.uri,
+      };
+    } catch (streamErr: unknown) {
+      console.warn('NativeFileManager streaming failed, falling back to chunked Filesystem:', streamErr);
+    }
+
+    try {
       const permStatus = await Filesystem.checkPermissions();
       if (permStatus.publicStorage !== 'granted') {
         const reqResult = await Filesystem.requestPermissions();
         if (reqResult.publicStorage !== 'granted') {
-          console.warn('Public storage permission denied, writing to app Data directory.');
+          console.warn('Public storage permission denied, falling back to app Data directory.');
         }
       }
 
-      // Convert blob to base64
-      const base64Data = await blobToBase64(blob);
-
-      // Save file to Documents (publicly visible on Android)
-      const writeResult = await Filesystem.writeFile({
-        path: filename,
-        data: base64Data,
-        directory: Directory.Documents,
-        recursive: true,
-      });
-
+      try {
+        const uri = await saveViaChunkedFilesystem(blob, filename, Directory.Documents);
+        return {
+          success: true,
+          method: 'native',
+          filename,
+          pathOrUri: uri,
+        };
+      } catch (docsErr) {
+        console.warn('Documents chunked save failed, trying app Data directory:', docsErr);
+        const uri = await saveViaChunkedFilesystem(blob, filename, Directory.Data);
+        return {
+          success: true,
+          method: 'native',
+          filename,
+          pathOrUri: uri,
+        };
+      }
+    } catch (nativeErr: unknown) {
+      const errMsg = nativeErr instanceof Error ? nativeErr.message : 'Native file save failed';
+      console.error('All native save paths failed:', errMsg);
       return {
-        success: true,
+        success: false,
         method: 'native',
         filename,
-        pathOrUri: writeResult.uri,
+        error: errMsg,
       };
-    } catch (nativeErr: unknown) {
-      const errMsg = nativeErr instanceof Error ? nativeErr.message : 'Filesystem write failed';
-      console.warn('Native filesystem save failed, falling back to Web download / share:', errMsg);
-      // Fall through to browser download/share fallback below
     }
   }
 
@@ -153,7 +233,7 @@ export async function saveFile(blob: Blob | File, rawFilename: string): Promise<
         filename,
       };
     }
-  } catch (webErr: unknown) {
+  } catch {
     // Fall through to share API
   }
 

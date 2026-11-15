@@ -15252,13 +15252,20 @@ var __vitePreload = function preload(baseModule, deps, importerUrl) {
 	});
 };
 // node_modules/@capacitor/filesystem/dist/esm/index.js
-var Filesystem = registerPlugin("Filesystem", { web: () => __vitePreload(() => import("./web-B94h6J7j.js").then((m) => new m.FilesystemWeb()), []) });
+var Filesystem = registerPlugin("Filesystem", { web: () => __vitePreload(() => import("./web-BQ-rdR6y.js").then((m) => new m.FilesystemWeb()), []) });
 f();
+// src/lib/nativeFileManager.ts
+/**
+* @license
+* SPDX-License-Identifier: Apache-2.0
+*/
+var NativeFileManager = registerPlugin("NativeFileManager");
 // src/lib/fileSave.ts
 /**
 * @license
 * SPDX-License-Identifier: Apache-2.0
 */
+var NATIVE_SAVE_CHUNK_SIZE = 786432;
 /**
 * Sanitizes filename to prevent path traversal or invalid characters.
 */
@@ -15267,27 +15274,76 @@ function sanitizeFilename$1(filename) {
 	return filename.replace(/\0/g, "").replace(/[/\\?%*:|"<>]/g, "_").trim() || "file";
 }
 /**
-* Converts a Blob or File to a base64 string using FileReader.
-* This utilizes native browser streaming to prevent memory crashes on large files.
+* Encodes a single small ArrayBuffer chunk to base64 without call stack overflow.
 */
-function blobToBase64(blob) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onloadend = () => {
-			const dataUrl = reader.result;
-			if (!dataUrl) {
-				reject(/* @__PURE__ */ new Error("Failed to convert file to base64"));
-				return;
-			}
-			const commaIndex = dataUrl.indexOf(",");
-			if (commaIndex !== -1) resolve(dataUrl.substring(commaIndex + 1));
-			else resolve(dataUrl);
-		};
-		reader.onerror = () => {
-			reject(reader.error || /* @__PURE__ */ new Error("FileReader error"));
-		};
-		reader.readAsDataURL(blob);
+function chunkBufferToBase64(buffer) {
+	const bytes = new Uint8Array(buffer);
+	if (bytes.length === 0) return "";
+	const subChunkSize = 32768;
+	let binary = "";
+	for (let i = 0; i < bytes.length; i += subChunkSize) {
+		const slice = bytes.subarray(i, Math.min(i + subChunkSize, bytes.length));
+		binary += String.fromCharCode.apply(null, slice);
+	}
+	return btoa(binary);
+}
+/**
+* Streams a Blob in fixed-size base64 chunks so peak memory stays ~2 MB regardless of total file size.
+*/
+async function streamBlobInBase64Chunks(blob, chunkSize, onChunk) {
+	if (blob.size === 0) {
+		await onChunk("", 0);
+		return;
+	}
+	let offset = 0;
+	let chunkIndex = 0;
+	while (offset < blob.size) {
+		const end = Math.min(blob.size, offset + chunkSize);
+		await onChunk(chunkBufferToBase64(await blob.slice(offset, end).arrayBuffer()), chunkIndex);
+		offset = end;
+		chunkIndex++;
+	}
+}
+async function saveViaNativeStream(blob, filename) {
+	const { streamId, filename: savedName } = await NativeFileManager.beginSaveFile({
+		filename,
+		mimeType: blob.type || "application/octet-stream"
 	});
+	try {
+		await streamBlobInBase64Chunks(blob, NATIVE_SAVE_CHUNK_SIZE, async (base64Chunk) => {
+			if (base64Chunk.length > 0) await NativeFileManager.writeSaveChunk({
+				streamId,
+				data: base64Chunk
+			});
+		});
+		const finishRes = await NativeFileManager.finishSaveFile({ streamId });
+		return {
+			uri: finishRes.uri,
+			filename: finishRes.filename || savedName || filename
+		};
+	} catch (err) {
+		await NativeFileManager.abortSaveFile({ streamId }).catch(() => {});
+		throw err;
+	}
+}
+async function saveViaChunkedFilesystem(blob, filename, directory) {
+	await streamBlobInBase64Chunks(blob, NATIVE_SAVE_CHUNK_SIZE, async (base64Chunk, chunkIndex) => {
+		if (chunkIndex === 0) await Filesystem.writeFile({
+			path: filename,
+			data: base64Chunk,
+			directory,
+			recursive: true
+		});
+		else if (base64Chunk.length > 0) await Filesystem.appendFile({
+			path: filename,
+			data: base64Chunk,
+			directory
+		});
+	});
+	return (await Filesystem.getUri({
+		path: filename,
+		directory
+	})).uri;
 }
 var activeObjectUrls = /* @__PURE__ */ new Set();
 /**
@@ -15331,31 +15387,55 @@ function triggerBrowserDownload(blob, rawFilename) {
 /**
 * Single shared file saving utility for both encryption output and decrypted restored files.
 * Works uniformly across:
-* - Native Android/Capacitor: Saves via @capacitor/filesystem to Public Documents directory.
+* - Native Android/Capacitor: Streams in 768 KB chunks via NativeFileManager (MediaStore/Documents)
+*   or chunked @capacitor/filesystem so large files never cause WebView/Java OOM crashes.
 * - Desktop Chrome/Firefox/Safari: Triggers download via <a download> without early URL revocation.
 * - Mobile Android Chrome / iOS Safari: Synchronous download + Web Share API fallback.
 */
 async function saveFile(blob, rawFilename) {
 	const filename = sanitizeFilename$1(rawFilename);
-	if (Capacitor.isNativePlatform()) try {
-		if ((await Filesystem.checkPermissions()).publicStorage !== "granted") {
-			if ((await Filesystem.requestPermissions()).publicStorage !== "granted") console.warn("Public storage permission denied, writing to app Data directory.");
+	if (Capacitor.isNativePlatform()) {
+		try {
+			const nativeResult = await saveViaNativeStream(blob, filename);
+			return {
+				success: true,
+				method: "native",
+				filename: nativeResult.filename,
+				pathOrUri: nativeResult.uri
+			};
+		} catch (streamErr) {
+			console.warn("NativeFileManager streaming failed, falling back to chunked Filesystem:", streamErr);
 		}
-		const base64Data = await blobToBase64(blob);
-		return {
-			success: true,
-			method: "native",
-			filename,
-			pathOrUri: (await Filesystem.writeFile({
-				path: filename,
-				data: base64Data,
-				directory: Directory.Documents,
-				recursive: true
-			})).uri
-		};
-	} catch (nativeErr) {
-		const errMsg = nativeErr instanceof Error ? nativeErr.message : "Filesystem write failed";
-		console.warn("Native filesystem save failed, falling back to Web download / share:", errMsg);
+		try {
+			if ((await Filesystem.checkPermissions()).publicStorage !== "granted") {
+				if ((await Filesystem.requestPermissions()).publicStorage !== "granted") console.warn("Public storage permission denied, falling back to app Data directory.");
+			}
+			try {
+				return {
+					success: true,
+					method: "native",
+					filename,
+					pathOrUri: await saveViaChunkedFilesystem(blob, filename, Directory.Documents)
+				};
+			} catch (docsErr) {
+				console.warn("Documents chunked save failed, trying app Data directory:", docsErr);
+				return {
+					success: true,
+					method: "native",
+					filename,
+					pathOrUri: await saveViaChunkedFilesystem(blob, filename, Directory.Data)
+				};
+			}
+		} catch (nativeErr) {
+			const errMsg = nativeErr instanceof Error ? nativeErr.message : "Native file save failed";
+			console.error("All native save paths failed:", errMsg);
+			return {
+				success: false,
+				method: "native",
+				filename,
+				error: errMsg
+			};
+		}
 	}
 	try {
 		if (triggerBrowserDownload(blob, filename)) return {
@@ -15363,7 +15443,7 @@ async function saveFile(blob, rawFilename) {
 			method: "download",
 			filename
 		};
-	} catch (webErr) {}
+	} catch {}
 	if (typeof navigator !== "undefined" && "canShare" in navigator) try {
 		const shareFile = new File([blob], filename, { type: blob.type || "application/octet-stream" });
 		if (navigator.canShare({ files: [shareFile] })) {
@@ -15697,8 +15777,7 @@ async function encryptFile(file, password, onProgress, keyfileBuffer) {
 		}, key, sliceBuffer);
 		const chunkLenBuffer = /* @__PURE__ */ new ArrayBuffer(4);
 		new DataView(chunkLenBuffer).setUint32(0, encryptedChunkBuffer.byteLength, true);
-		blobParts.push(chunkLenBuffer);
-		blobParts.push(encryptedChunkBuffer);
+		blobParts.push(new Blob([chunkLenBuffer, encryptedChunkBuffer]));
 		processedBytes += sliceBuffer.byteLength;
 		const pct = Math.min(95, Math.round(15 + processedBytes / Math.max(1, file.size) * 80));
 		onProgress?.({
@@ -15777,7 +15856,7 @@ async function decryptFile(file, password, onProgress, keyfileBuffer) {
 					iv: chunkIv,
 					additionalData: aad
 				}, key, encChunkBuffer);
-				decryptedBlobParts.push(decryptedChunk);
+				decryptedBlobParts.push(new Blob([decryptedChunk]));
 				chunkIndex++;
 				const pct = Math.min(95, Math.round(15 + fileOffset / Math.max(1, totalFileSize) * 80));
 				onProgress?.({
@@ -15838,7 +15917,7 @@ async function decryptFile(file, password, onProgress, keyfileBuffer) {
 					iv: chunkIv,
 					additionalData: aad
 				}, key, encChunkBuffer);
-				decryptedBlobParts.push(decryptedChunk);
+				decryptedBlobParts.push(new Blob([decryptedChunk]));
 				chunkIndex++;
 				const pct = Math.min(95, Math.round(15 + fileOffset / Math.max(1, totalFileSize) * 80));
 				onProgress?.({
@@ -16162,34 +16241,35 @@ var Weekday;
 	Weekday[Weekday["Saturday"] = 7] = "Saturday";
 })(Weekday || (Weekday = {}));
 // node_modules/@capacitor/local-notifications/dist/esm/index.js
-var LocalNotifications = registerPlugin("LocalNotifications", { web: () => __vitePreload(() => import("./web-9rqqavzO.js").then((m) => new m.LocalNotificationsWeb()), []) });
+var LocalNotifications = registerPlugin("LocalNotifications", { web: () => __vitePreload(() => import("./web-BRPmzzu3.js").then((m) => new m.LocalNotificationsWeb()), []) });
 // src/lib/notifications.ts
 /**
 * @license
 * SPDX-License-Identifier: Apache-2.0
 */
-var NativeFileManager = registerPlugin("NativeFileManager");
 var hasRequestedPermission = false;
 var isChannelCreated = false;
 var isListenerRegistered = false;
 var NOTIFICATION_CHANNEL_ID = "zero_operations";
+async function ensureNotificationChannel() {
+	if (!Capacitor.isNativePlatform() || isChannelCreated) return;
+	await LocalNotifications.createChannel({
+		id: NOTIFICATION_CHANNEL_ID,
+		name: "Cryptographic Operations",
+		description: "Notifies when Zero file encryption or decryption completes or fails.",
+		importance: 4,
+		visibility: 1,
+		vibration: true
+	});
+	isChannelCreated = true;
+}
 /**
 * Initializes notification listeners and channels.
 * Called once on app startup or first user interaction.
 */
 async function initNotifications(onNotificationTap) {
 	if (Capacitor.isNativePlatform()) try {
-		if (!isChannelCreated) {
-			await LocalNotifications.createChannel({
-				id: NOTIFICATION_CHANNEL_ID,
-				name: "Cryptographic Operations",
-				description: "Notifies when Zero file encryption or decryption completes or fails.",
-				importance: 4,
-				visibility: 1,
-				vibration: true
-			});
-			isChannelCreated = true;
-		}
+		await ensureNotificationChannel();
 		if (!isListenerRegistered) {
 			await LocalNotifications.addListener("localNotificationActionPerformed", async (notificationAction) => {
 				onNotificationTap?.({ actionId: notificationAction.actionId });
@@ -16274,13 +16354,14 @@ async function notifyOperationComplete({ type, filename, success }) {
 	}
 	if (Capacitor.isNativePlatform()) {
 		try {
+			await ensureNotificationChannel();
 			const id = Math.floor(Math.random() * 1e6) + 1;
 			await LocalNotifications.schedule({ notifications: [{
 				id,
 				title,
 				body,
 				channelId: NOTIFICATION_CHANNEL_ID,
-				smallIcon: "ic_stat_icon_config_sample",
+				autoCancel: true,
 				extra: {
 					type,
 					success,
@@ -16307,6 +16388,83 @@ async function notifyOperationComplete({ type, filename, success }) {
 		});
 	} catch (swErr) {
 		console.warn("Service worker showNotification failed:", swErr);
+	}
+}
+/**
+* @license
+* SPDX-License-Identifier: Apache-2.0
+*/
+/**
+* Manual or shortcut-triggered emergency wipe must NEVER activate while
+* encryption, decryption, or storage saving is actively running.
+*/
+function shouldAllowEmergencyWipe(isProcessing) {
+	return !isProcessing;
+}
+/**
+* Evaluates the auto-clear inactivity countdown.
+* While `isProcessing` is true (including while the app is minimized during
+* encryption/decryption or storage saving), the timer pauses at full timeout
+* and refreshes `lastActivityMs` so auto-clear never interrupts or fires
+* immediately upon completion.
+*/
+function evaluateInactivityTick({ autoClearEnabled, isProcessing, nowMs, lastActivityMs, hasSensitiveData, timeoutSeconds = 60 }) {
+	if (isProcessing) return {
+		remainingSeconds: timeoutSeconds,
+		shouldAutoClear: false,
+		nextLastActivityMs: nowMs
+	};
+	if (!autoClearEnabled) return {
+		remainingSeconds: timeoutSeconds,
+		shouldAutoClear: false,
+		nextLastActivityMs: lastActivityMs
+	};
+	const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastActivityMs) / 1e3));
+	const remainingSeconds = Math.max(0, timeoutSeconds - elapsedSeconds);
+	if (remainingSeconds === 0 && hasSensitiveData) return {
+		remainingSeconds: timeoutSeconds,
+		shouldAutoClear: true,
+		nextLastActivityMs: nowMs
+	};
+	return {
+		remainingSeconds,
+		shouldAutoClear: false,
+		nextLastActivityMs: lastActivityMs
+	};
+}
+// src/lib/backgroundTask.ts
+/**
+* @license
+* SPDX-License-Identifier: Apache-2.0
+*/
+var activeBackgroundTasks = 0;
+/**
+* Starts the Android Foreground Service before long file encryption/decryption or
+* storage writes so Android does not freeze execution when the app is minimized.
+* Uses a reference count so nested calls (batch + save) stay active until all finish.
+*/
+async function startBackgroundProcessing(mode) {
+	if (!Capacitor.isNativePlatform()) return;
+	activeBackgroundTasks++;
+	if (activeBackgroundTasks > 1) return;
+	try {
+		await NativeFileManager.startBackgroundTask({ mode });
+	} catch (err) {
+		console.warn("Unable to start background foreground service:", err);
+	}
+}
+/**
+* Decrements the active background task count and stops the Android Foreground
+* Service + WakeLock once all active operations and storage writes finish.
+*/
+async function stopBackgroundProcessing() {
+	if (!Capacitor.isNativePlatform()) return;
+	activeBackgroundTasks = Math.max(0, activeBackgroundTasks - 1);
+	if (activeBackgroundTasks > 0) return;
+	try {
+		await NativeFileManager.stopBackgroundTask();
+	} catch (err) {
+		console.warn("Unable to stop background foreground service:", err);
 	}
 }
 // node_modules/react/cjs/react-jsx-runtime.production.js
@@ -16347,7 +16505,7 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 var import_jsx_runtime = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 })))();
-var Header = ({ theme, onThemeChange, onEmergencyWipe, inactivityRemaining, autoClearEnabled, onToggleAutoClear }) => {
+var Header = ({ theme, onThemeChange, onEmergencyWipe, isProcessing = false, inactivityRemaining, autoClearEnabled, onToggleAutoClear }) => {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
 		className: "w-full bg-transparent transition-colors",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -16376,9 +16534,11 @@ var Header = ({ theme, onThemeChange, onEmergencyWipe, inactivityRemaining, auto
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
 						onClick: onEmergencyWipe,
-						className: "p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error-bg)] border border-transparent hover:border-[var(--color-error)]/30 transition-all focus-ring",
-						title: "Emergency Wipe (Ctrl+Shift+L)",
+						disabled: isProcessing,
+						className: `p-2 rounded-lg border border-transparent transition-all focus-ring ${isProcessing ? "text-[var(--text-muted)] opacity-40 cursor-not-allowed" : "text-[var(--text-muted)] hover:text-[var(--color-error)] hover:bg-[var(--color-error-bg)] hover:border-[var(--color-error)]/30"}`,
+						title: isProcessing ? "Emergency Wipe disabled while encrypting or decrypting" : "Emergency Wipe (Ctrl+Shift+L)",
 						"aria-label": "Emergency Wipe buffer (Shortcut: Ctrl+Shift+L)",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Trash2, { className: "w-4 h-4" })
 					}),
@@ -16463,7 +16623,7 @@ var Footer = () => {
 				className: "flex items-center gap-3 text-[11px] text-[var(--text-muted)]",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "AES-256-GCM · Client-side" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "font-mono-code",
-					children: "v2.0.0 (prod)"
+					children: "v2.01.1 (prod)"
 				})]
 			})]
 		})
@@ -19038,7 +19198,7 @@ var AboutPage = () => {
 									className: "inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-text)] transition-all shadow-sm focus-ring",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Download Android APK (v2.0.0)" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Download Android APK (v2.01.1)" }),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "w-3 h-3 opacity-80" })
 									]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
@@ -19270,6 +19430,7 @@ function App() {
 	const [payloadType, setPayloadType] = (0, import_react.useState)("text");
 	const [autoDownload, setAutoDownload] = (0, import_react.useState)(true);
 	const [isProcessing, setIsProcessing] = (0, import_react.useState)(false);
+	const isProcessingRef = (0, import_react.useRef)(false);
 	const [isQrModalOpen, setIsQrModalOpen] = (0, import_react.useState)(false);
 	const [toasts, setToasts] = (0, import_react.useState)([]);
 	const [autoClearBanner, setAutoClearBanner] = (0, import_react.useState)(null);
@@ -19301,6 +19462,7 @@ function App() {
 		if (new URLSearchParams(window.location.search).get("from_notification")) addToast("File Operation Complete", "Your processed file has been saved to your device.", "info");
 	}, [addToast]);
 	const handleEmergencyWipe = (0, import_react.useCallback)(() => {
+		if (!shouldAllowEmergencyWipe(isProcessingRef.current)) return;
 		setInputText("");
 		setOutputText("");
 		setPassword("");
@@ -19364,11 +19526,16 @@ function App() {
 		window.addEventListener("click", markActivity);
 		window.addEventListener("touchstart", markActivity);
 		const interval = setInterval(() => {
-			if (!autoClearEnabled) return;
-			const elapsed = Math.floor((Date.now() - lastActivityRef.current) / 1e3);
-			const remaining = Math.max(0, 60 - elapsed);
-			setInactivityRemaining(remaining);
-			if (remaining === 0 && (password || keyfile || inputText || outputText || files.length > 0)) {
+			const evalResult = evaluateInactivityTick({
+				autoClearEnabled,
+				isProcessing: isProcessing || isProcessingRef.current,
+				nowMs: Date.now(),
+				lastActivityMs: lastActivityRef.current,
+				hasSensitiveData: Boolean(password || keyfile || inputText || outputText || files.length > 0)
+			});
+			lastActivityRef.current = evalResult.nextLastActivityMs;
+			setInactivityRemaining(evalResult.remainingSeconds);
+			if (evalResult.shouldAutoClear) {
 				setInputText("");
 				setOutputText("");
 				setPassword("");
@@ -19377,8 +19544,6 @@ function App() {
 				setKeyfileFingerprint(null);
 				setFiles([]);
 				setIsQrModalOpen(false);
-				lastActivityRef.current = Date.now();
-				setInactivityRemaining(60);
 				setAutoClearBanner("Buffer auto-cleared due to 60s of inactivity to prevent physical surveillance.");
 				addToast("Buffer Auto-Cleared", "Cleared after 60s of inactivity for zero-knowledge safety.", "info");
 			}
@@ -19392,7 +19557,9 @@ function App() {
 		};
 	}, [
 		autoClearEnabled,
+		isProcessing,
 		password,
+		keyfile,
 		inputText,
 		outputText,
 		files.length,
@@ -19452,13 +19619,15 @@ function App() {
 			addToast("Credentials Required", "Please enter a passphrase or attach a keyfile.", "warning");
 			return;
 		}
-		await requestNotificationPermissionOnUserAction();
+		if (isProcessingRef.current) return;
+		isProcessingRef.current = true;
 		setIsProcessing(true);
+		let backgroundServiceStarted = false;
 		try {
+			await requestNotificationPermissionOnUserAction();
 			if (payloadType === "text") {
 				if (!inputText.trim()) {
 					addToast("Input Required", "Please provide text to process.", "warning");
-					setIsProcessing(false);
 					return;
 				}
 				if (mode === "encrypt") {
@@ -19473,14 +19642,14 @@ function App() {
 			} else {
 				if (files.length === 0) {
 					addToast("No Files Attached", "Please select or drag files into the drop zone.", "warning");
-					setIsProcessing(false);
 					return;
 				}
 				if (files.filter((f) => f.status !== "completed").length === 0) {
 					addToast("Files Already Processed", "All attached files have already been processed.", "info");
-					setIsProcessing(false);
 					return;
 				}
+				await startBackgroundProcessing(mode);
+				backgroundServiceStarted = true;
 				for (const item of files) {
 					if (item.status === "completed") continue;
 					setFiles((prev) => prev.map((f) => f.id === item.id ? {
@@ -19504,15 +19673,19 @@ function App() {
 								resultBlob: blob,
 								resultFileName: fileName
 							} : f));
+							let savedFilename = fileName;
+							let saveSuccess = true;
 							if (autoDownload) {
 								const saveRes = await saveFile(blob, fileName);
-								if (saveRes.success) addToast("File Saved", saveRes.method === "native" ? `${fileName} saved to Documents directory.` : `${fileName} downloaded.`, "success");
-								else addToast("Save Notice", saveRes.error || "Could not auto-download file.", "warning");
+								saveSuccess = saveRes.success;
+								savedFilename = saveRes.filename || fileName;
+								if (saveRes.success) addToast("File Saved", saveRes.method === "native" ? `${savedFilename} saved to device storage.` : `${savedFilename} downloaded.`, "success");
+								else addToast("Save Notice", saveRes.error || "Could not save file to storage.", "warning");
 							}
 							await notifyOperationComplete({
 								type: "encrypt",
-								filename: fileName,
-								success: true
+								filename: savedFilename,
+								success: saveSuccess
 							});
 						} else {
 							const restoredFile = await decryptFile(item.file, password, (prog) => {
@@ -19529,15 +19702,19 @@ function App() {
 								resultBlob: restoredFile,
 								resultFileName: restoredFile.name
 							} : f));
+							let savedFilename = restoredFile.name;
+							let saveSuccess = true;
 							if (autoDownload) {
 								const saveRes = await saveFile(restoredFile, restoredFile.name);
-								if (saveRes.success) addToast("File Restored & Saved", saveRes.method === "native" ? `${restoredFile.name} saved to Documents directory.` : `${restoredFile.name} downloaded.`, "success");
-								else addToast("Save Notice", saveRes.error || "Could not auto-download file.", "warning");
+								saveSuccess = saveRes.success;
+								savedFilename = saveRes.filename || restoredFile.name;
+								if (saveRes.success) addToast("File Restored & Saved", saveRes.method === "native" ? `${savedFilename} saved to device storage.` : `${savedFilename} downloaded.`, "success");
+								else addToast("Save Notice", saveRes.error || "Could not save file to storage.", "warning");
 							}
 							await notifyOperationComplete({
 								type: "decrypt",
-								filename: restoredFile.name,
-								success: true
+								filename: savedFilename,
+								success: saveSuccess
 							});
 						}
 					} catch (fileErr) {
@@ -19561,6 +19738,10 @@ function App() {
 			const errMessage = err instanceof Error ? err.message : "Cryptographic operation failed";
 			addToast("Operation Failed", errMessage, "error");
 		} finally {
+			if (backgroundServiceStarted) await stopBackgroundProcessing();
+			isProcessingRef.current = false;
+			lastActivityRef.current = Date.now();
+			setInactivityRemaining(60);
 			setIsProcessing(false);
 		}
 	};
@@ -19673,6 +19854,7 @@ function App() {
 				theme,
 				onThemeChange: updateTheme,
 				onEmergencyWipe: handleEmergencyWipe,
+				isProcessing,
 				inactivityRemaining,
 				autoClearEnabled,
 				onToggleAutoClear: () => setAutoClearEnabled(!autoClearEnabled)

@@ -471,8 +471,7 @@ export async function encryptFile(
     const chunkLenBuffer = new ArrayBuffer(4);
     new DataView(chunkLenBuffer).setUint32(0, encryptedChunkBuffer.byteLength, true);
 
-    blobParts.push(chunkLenBuffer);
-    blobParts.push(encryptedChunkBuffer);
+    blobParts.push(new Blob([chunkLenBuffer, encryptedChunkBuffer]));
 
     processedBytes += sliceBuffer.byteLength;
     const pct = Math.min(95, Math.round(15 + (processedBytes / Math.max(1, file.size)) * 80));
@@ -614,7 +613,7 @@ export async function decryptFile(
           encChunkBuffer
         );
 
-        decryptedBlobParts.push(decryptedChunk);
+        decryptedBlobParts.push(new Blob([decryptedChunk]));
         chunkIndex++;
 
         const pct = Math.min(95, Math.round(15 + (fileOffset / Math.max(1, totalFileSize)) * 80));
@@ -718,7 +717,7 @@ export async function decryptFile(
           encChunkBuffer
         );
 
-        decryptedBlobParts.push(decryptedChunk);
+        decryptedBlobParts.push(new Blob([decryptedChunk]));
         chunkIndex++;
 
         const pct = Math.min(95, Math.round(15 + (fileOffset / Math.max(1, totalFileSize)) * 80));
